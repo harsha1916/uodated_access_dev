@@ -1110,6 +1110,161 @@ def get_transactions():
     except Exception as e:
         return jsonify({"status": "error", "message": f"Error fetching transactions: {str(e)}"}), 500
 
+# --- User-specific Transactions ---
+@app.route("/get_user_transactions", methods=["GET"])
+def get_user_transactions():
+    """Fetch transactions filtered by user_id or card_number for the current entity with pagination.
+
+    Query params:
+      - user_id: optional
+      - card_number: optional
+      - limit/page_size: number of items to return (default 200, max 1000)
+      - cursor/before_ts: return items with timestamp <= cursor (pagination)
+    """
+    try:
+        user_id = request.args.get("user_id", "").strip()
+        card_number = request.args.get("card_number", "").strip()
+        # page size / limit
+        limit = int(request.args.get("page_size", request.args.get("limit", "200")))
+        limit = max(10, min(limit, 1000))
+        # pagination cursor (timestamp)
+        cursor_param = request.args.get("cursor") or request.args.get("before_ts") or ""
+        try:
+            cursor_ts = int(cursor_param) if cursor_param else None
+        except ValueError:
+            cursor_ts = None
+
+        results = []
+        next_cursor = None
+
+        # Online path: query recent transactions then filter by entity and user
+        if db is not None and is_internet_available():
+            try:
+                q = db.collection("transactions").order_by("timestamp", direction=firestore.Query.DESCENDING)
+                if cursor_ts is not None:
+                    q = q.where("timestamp", "<=", cursor_ts)
+                docs_iter = q.limit(limit * 2).stream()  # fetch extra for filtering
+                docs = [d.to_dict() or {} for d in docs_iter]
+
+                for tx in docs:
+                    if tx.get("entity_id") != ENTITY_ID:
+                        continue
+                    if user_id and (tx.get("user_id") or "") != user_id:
+                        continue
+                    if card_number and (tx.get("card_number") or "") != card_number:
+                        continue
+                    results.append(tx)
+                    if len(results) >= limit:
+                        break
+            except Exception as e:
+                logging.error(f"Error querying user transactions: {e}")
+
+        # Fallback to offline cache
+        if not results:
+            cached = read_json_or_default(TRANSACTION_CACHE_FILE, [])
+            # newest last in cache; reverse iterate
+            iterable = reversed(cached)
+            for tx in iterable:
+                if tx.get("entity_id") != ENTITY_ID:
+                    continue
+                if user_id and (tx.get("user_id") or "") != user_id:
+                    continue
+                if card_number and (tx.get("card_number") or "") != card_number:
+                    continue
+                if cursor_ts is not None and tx.get("timestamp") and int(tx.get("timestamp")) > cursor_ts:
+                    continue
+                results.append(tx)
+                if len(results) >= limit:
+                    break
+
+        # Build analytics
+        total = len(results)
+        granted = sum(1 for t in results if (t.get("status") or "").lower().startswith("access granted"))
+        denied = sum(1 for t in results if (t.get("status") or "").lower().startswith("access denied"))
+        blocked = sum(1 for t in results if (t.get("status") or "").lower().startswith("blocked"))
+        last_seen = max((t.get("timestamp", 0) for t in results), default=0)
+
+        # Pagination: if results filled to limit, offer next_cursor as last item's ts - 1
+        if results:
+            results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+            if len(results) >= limit:
+                last_ts = results[-1].get("timestamp")
+                try:
+                    next_cursor = int(last_ts) - 1 if last_ts is not None else None
+                except Exception:
+                    next_cursor = None
+
+        return jsonify({
+            "transactions": results[:limit],
+            "analytics": {
+                "total": total,
+                "granted": granted,
+                "denied": denied,
+                "blocked": blocked,
+                "last_seen": last_seen
+            },
+            "next_cursor": next_cursor
+        })
+
+    except Exception as e:
+        logging.error(f"get_user_transactions error: {e}")
+        return jsonify({"status": "error", "message": f"Error fetching user transactions: {str(e)}"}), 500
+
+@app.route("/export_user_transactions", methods=["GET"])
+def export_user_transactions():
+    """Export user transactions as CSV (applies same filters)."""
+    try:
+        from io import StringIO
+        import csv
+
+        user_id = request.args.get("user_id", "").strip()
+        card_number = request.args.get("card_number", "").strip()
+        limit = int(request.args.get("limit", "5000"))
+        limit = max(10, min(limit, 20000))
+        cursor_param = request.args.get("cursor") or request.args.get("before_ts") or ""
+        try:
+            cursor_ts = int(cursor_param) if cursor_param else None
+        except ValueError:
+            cursor_ts = None
+
+        # Reuse logic via internal call
+        with app.test_request_context(
+            f"/get_user_transactions?user_id={user_id}&card_number={card_number}&limit={limit}&cursor={cursor_ts if cursor_ts else ''}"
+        ):
+            data_resp = get_user_transactions()
+        if hasattr(data_resp, "json"):
+            payload = data_resp.json
+        else:
+            from flask import json as flask_json
+            payload = flask_json.loads(data_resp[0].data.decode("utf-8")) if isinstance(data_resp, tuple) else data_resp.get_json()
+
+        txs = payload.get("transactions", [])
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["timestamp","card_number","name","status","reader","entity_id","user_id"]) 
+        for t in txs:
+            writer.writerow([
+                t.get("timestamp",""),
+                t.get("card_number",""),
+                t.get("name",""),
+                t.get("status",""),
+                t.get("reader",""),
+                t.get("entity_id",""),
+                t.get("user_id",""),
+            ])
+
+        from flask import Response
+        csv_data = output.getvalue()
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=user_transactions.csv"}
+        )
+
+    except Exception as e:
+        logging.error(f"export_user_transactions error: {e}")
+        return jsonify({"status": "error", "message": f"Error exporting user transactions: {str(e)}"}), 500
+
 # --- Image Management ---
 @app.route("/get_images", methods=["GET"])
 def get_images():
@@ -2414,13 +2569,22 @@ def handle_access(bits, value, reader_id):
         # Capture image in the background; name format: CARD_TIMESTAMP.jpg
         camera_executor.submit(capture_for_reader_async, reader_id, card_int)
 
+        # Resolve user_id if present in local users
+        try:
+            with USERS_LOCK:
+                user_record = users.get(str(card_int)) if isinstance(users, dict) else None
+                user_id_value = user_record.get("id") if isinstance(user_record, dict) else None
+        except Exception:
+            user_id_value = None
+
         transaction = {
             "card_number": str(card_int),
             "name": name,
             "status": status,
             "timestamp": timestamp,
             "reader": reader_id,
-            "entity_id": ENTITY_ID
+            "entity_id": ENTITY_ID,
+            "user_id": user_id_value if user_id_value else ""
         }
 
         # Update daily statistics
@@ -2495,12 +2659,18 @@ def image_uploader_worker():
         finally:
             image_queue.task_done()
 
-def enqueue_pending_images(limit=50):
+def enqueue_pending_images(limit=None):
     """
     Scan IMAGES_DIR for .jpg without .uploaded.json and enqueue for upload.
     Called from sync loop only when online.
     """
     try:
+        if limit is None:
+            try:
+                from config import IMAGE_ENQUEUE_LIMIT
+                limit = IMAGE_ENQUEUE_LIMIT
+            except Exception:
+                limit = 500
         count = 0
         for name in os.listdir(IMAGES_DIR):
             if not name.lower().endswith(".jpg"):
@@ -2572,12 +2742,16 @@ def sync_loop():
                     check_relay_status()
                     check_user_status()
                     sync_transactions()
-                    enqueue_pending_images(limit=50)  # opportunistic image uploads
+                    enqueue_pending_images()  # opportunistic image uploads (configurable limit)
                 except Exception as e:
                     logging.error(f"Error in Firebase/image sync operations: {str(e)}")
             else:
                 logging.debug("No internet connection. Skipping Firebase & image upload sync.")
-            sync_interval = int(os.environ.get('SYNC_INTERVAL', 60))
+            try:
+                from config import SYNC_INTERVAL
+                sync_interval = SYNC_INTERVAL
+            except Exception:
+                sync_interval = int(os.environ.get('SYNC_INTERVAL', 60))
             time.sleep(sync_interval)
         except Exception as e:
             logging.error(f"Error in sync loop: {str(e)}")
@@ -2653,7 +2827,16 @@ else:
 # Background threads
 threading.Thread(target=sync_loop, daemon=True).start()
 threading.Thread(target=transaction_uploader, daemon=True).start()
-threading.Thread(target=image_uploader_worker, daemon=True).start()
+
+# Start multiple image uploader workers for higher throughput
+try:
+    from config import IMAGE_UPLOAD_WORKERS
+    worker_count = max(1, int(IMAGE_UPLOAD_WORKERS))
+except Exception:
+    worker_count = 3
+
+for _ in range(worker_count):
+    threading.Thread(target=image_uploader_worker, daemon=True).start()
 threading.Thread(target=session_cleanup_worker, daemon=True).start()
 threading.Thread(target=daily_stats_cleanup_worker, daemon=True).start()
 threading.Thread(target=storage_monitor_worker, daemon=True).start()

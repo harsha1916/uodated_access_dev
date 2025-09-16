@@ -178,6 +178,11 @@
                 </button>
             </li>
             <li class="nav-item" role="presentation">
+                <button class="nav-link" id="user-transactions-tab" data-bs-toggle="tab" data-bs-target="#user-transactions" type="button" role="tab">
+                    <i class="fas fa-user-clock"></i> User Transactions
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
                 <button class="nav-link" id="storage-tab" data-bs-toggle="tab" data-bs-target="#storage" type="button" role="tab">
                     <i class="fas fa-chart-pie"></i> Storage & Analytics
                 </button>
@@ -379,6 +384,100 @@
                 </div>
             </div>
 
+            <!-- User Transactions Tab -->
+            <div class="tab-pane fade" id="user-transactions" role="tabpanel">
+                <div class="container-fluid mt-3">
+                    <div class="card mb-3">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <h5 class="mb-0"><i class="fas fa-user-clock"></i> Search User Transactions</h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="clearUserTxResults()">
+                                <i class="fas fa-eraser"></i> Clear
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="row g-3 align-items-end">
+                                <div class="col-md-3">
+                                    <label for="userTxUserId" class="form-label">User ID</label>
+                                    <input type="text" class="form-control" id="userTxUserId" placeholder="EMP001">
+                                </div>
+                                <div class="col-md-3">
+                                    <label for="userTxCardNumber" class="form-label">Card Number</label>
+                                    <input type="text" class="form-control" id="userTxCardNumber" placeholder="123456789">
+                                </div>
+                                <div class="col-md-2">
+                                    <label for="userTxLimit" class="form-label">Limit</label>
+                                    <input type="number" class="form-control" id="userTxLimit" value="200" min="10" max="1000">
+                                </div>
+                                <div class="col-md-2">
+                                    <button class="btn btn-primary w-100" onclick="searchUserTransactions()">
+                                        <i class="fas fa-search"></i> Search
+                                    </button>
+                                </div>
+                                <div class="col-md-2">
+                                    <button class="btn btn-outline-success w-100" onclick="downloadUserTransactionsCsv()">
+                                        <i class="fas fa-file-csv"></i> Download CSV
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-header"><i class="fas fa-chart-pie"></i> Analytics</div>
+                                <div class="card-body">
+                                    <canvas id="userTxStatusChart" height="220"></canvas>
+                                    <hr>
+                                    <ul class="list-group">
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            Total
+                                            <span class="badge bg-secondary" id="userTxTotal">0</span>
+                                        </li>
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            Granted
+                                            <span class="badge bg-success" id="userTxGranted">0</span>
+                                        </li>
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            Denied
+                                            <span class="badge bg-danger" id="userTxDenied">0</span>
+                                        </li>
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            Blocked
+                                            <span class="badge bg-warning text-dark" id="userTxBlocked">0</span>
+                                        </li>
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            Last Seen
+                                            <span class="badge bg-info text-dark" id="userTxLastSeen">-</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <div class="card">
+                                <div class="card-header">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span><i class="fas fa-list"></i> Transactions</span>
+                                        <span class="text-muted" id="userTxCount">0 results</span>
+                                    </div>
+                                    <div class="d-flex gap-2 mt-2">
+                                        <button class="btn btn-sm btn-outline-secondary" id="userTxPrevBtn" onclick="paginateUserTx('prev')" disabled>
+                                            <i class="fas fa-chevron-left"></i> Prev
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary" id="userTxNextBtn" onclick="paginateUserTx('next')" disabled>
+                                            Next <i class="fas fa-chevron-right"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div id="userTxResults"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <!-- Image Gallery -->
             <div class="col-md-6">
                 <div class="card">
@@ -1389,6 +1488,144 @@
             document.getElementById('uploaded-count').textContent = data.uploaded;
             document.getElementById('pending-count').textContent = data.pending;
             document.getElementById('failed-count').textContent = data.failed;
+        }
+
+        async function searchUserTransactions() {
+            try {
+                const userId = document.getElementById('userTxUserId').value.trim();
+                const cardNumber = document.getElementById('userTxCardNumber').value.trim();
+                const limit = parseInt(document.getElementById('userTxLimit').value) || 200;
+
+                const url = new URL('/get_user_transactions', window.location.origin);
+                if (userId) url.searchParams.set('user_id', userId);
+                if (cardNumber) url.searchParams.set('card_number', cardNumber);
+                url.searchParams.set('limit', String(limit));
+
+                const resp = await fetch(url.toString());
+                if (!resp.ok) {
+                    throw new Error(`Request failed: ${resp.status}`);
+                }
+                const data = await resp.json();
+                renderUserTransactions(data);
+            } catch (err) {
+                showNotification(`Error fetching user transactions: ${err.message}`, 'danger');
+            }
+        }
+
+        function clearUserTxResults() {
+            document.getElementById('userTxResults').innerHTML = '';
+            document.getElementById('userTxCount').textContent = '0 results';
+            document.getElementById('userTxTotal').textContent = '0';
+            document.getElementById('userTxGranted').textContent = '0';
+            document.getElementById('userTxDenied').textContent = '0';
+            document.getElementById('userTxBlocked').textContent = '0';
+            document.getElementById('userTxLastSeen').textContent = '-';
+        }
+
+        function renderUserTransactions(payload) {
+            const { transactions = [], analytics = {} } = payload || {};
+            const container = document.getElementById('userTxResults');
+            const countEl = document.getElementById('userTxCount');
+            window._userTxNextCursor = payload.next_cursor || null;
+            document.getElementById('userTxNextBtn').disabled = !window._userTxNextCursor;
+            // prev handling: simple client-side stack of cursors
+            window._userTxCursorStack = window._userTxCursorStack || [];
+
+            // Analytics
+            document.getElementById('userTxTotal').textContent = analytics.total ?? transactions.length;
+            document.getElementById('userTxGranted').textContent = analytics.granted ?? 0;
+            document.getElementById('userTxDenied').textContent = analytics.denied ?? 0;
+            document.getElementById('userTxBlocked').textContent = analytics.blocked ?? 0;
+            document.getElementById('userTxLastSeen').textContent = analytics.last_seen ? new Date(analytics.last_seen * 1000).toLocaleString() : '-';
+
+            countEl.textContent = `${transactions.length} results`;
+
+            if (!transactions.length) {
+                container.innerHTML = '<div class="text-muted">No transactions found for the selected user.</div>';
+                return;
+            }
+
+            const rows = transactions.map(tx => {
+                const ts = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleString() : '-';
+                const statusClass = (tx.status || '').toLowerCase().replace(/\s+/g, '-');
+                return `
+                    <div class="card scan-card ${statusClass} mb-2">
+                        <div class="card-body py-2">
+                            <div class="row align-items-center">
+                                <div class="col-md-3"><strong>${ts}</strong></div>
+                                <div class="col-md-2">${tx.card_number || 'N/A'}</div>
+                                <div class="col-md-3">${tx.name || 'Unknown'}</div>
+                                <div class="col-md-2">Reader ${tx.reader ?? '-'}</div>
+                                <div class="col-md-2 text-end"><span class="badge bg-secondary">${tx.status || 'Unknown'}</span></div>
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
+
+            container.innerHTML = rows;
+
+            // Charts
+            renderUserTxStatusChart(analytics);
+        }
+
+        function paginateUserTx(direction) {
+            const userId = document.getElementById('userTxUserId').value.trim();
+            const cardNumber = document.getElementById('userTxCardNumber').value.trim();
+            const limit = parseInt(document.getElementById('userTxLimit').value) || 200;
+
+            const url = new URL('/get_user_transactions', window.location.origin);
+            if (userId) url.searchParams.set('user_id', userId);
+            if (cardNumber) url.searchParams.set('card_number', cardNumber);
+            url.searchParams.set('limit', String(limit));
+
+            if (direction === 'next' && window._userTxNextCursor) {
+                // push current next_cursor into stack for prev navigation
+                window._userTxCursorStack.push(window._userTxNextCursor);
+                url.searchParams.set('cursor', String(window._userTxNextCursor));
+            } else if (direction === 'prev') {
+                const prevCursor = window._userTxCursorStack.pop();
+                if (prevCursor) {
+                    url.searchParams.set('cursor', String(prevCursor));
+                } else {
+                    document.getElementById('userTxPrevBtn').disabled = true;
+                }
+            }
+
+            fetch(url.toString()).then(r => r.json()).then(renderUserTransactions)
+                .then(() => {
+                    document.getElementById('userTxPrevBtn').disabled = !window._userTxCursorStack || window._userTxCursorStack.length === 0;
+                    document.getElementById('userTxNextBtn').disabled = !window._userTxNextCursor;
+                })
+                .catch(err => showNotification(`Pagination error: ${err.message}`, 'danger'));
+        }
+
+        function renderUserTxStatusChart(analytics) {
+            const ctx = document.getElementById('userTxStatusChart');
+            if (!ctx) return;
+            const data = {
+                labels: ['Granted','Denied','Blocked'],
+                datasets: [{
+                    data: [analytics.granted || 0, analytics.denied || 0, analytics.blocked || 0],
+                    backgroundColor: ['#198754','#dc3545','#ffc107']
+                }]
+            };
+            if (window._userTxStatusChart) {
+                window._userTxStatusChart.data = data;
+                window._userTxStatusChart.update();
+            } else {
+                window._userTxStatusChart = new Chart(ctx, { type: 'pie', data });
+            }
+        }
+
+        function downloadUserTransactionsCsv() {
+            const userId = document.getElementById('userTxUserId').value.trim();
+            const cardNumber = document.getElementById('userTxCardNumber').value.trim();
+            const limit = parseInt(document.getElementById('userTxLimit').value) || 2000;
+            const url = new URL('/export_user_transactions', window.location.origin);
+            if (userId) url.searchParams.set('user_id', userId);
+            if (cardNumber) url.searchParams.set('card_number', cardNumber);
+            url.searchParams.set('limit', String(limit));
+            window.location.href = url.toString();
         }
 
         function showImageModal(filename, cardNumber, timestamp, uploaded, s3Location) {

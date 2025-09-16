@@ -45,6 +45,12 @@ S3_API_URL = os.getenv("S3_API_URL", "https://api.easyparkai.com/api/Common/Uplo
 # Retry Configuration
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
 RETRY_DELAY = int(os.getenv("RETRY_DELAY", "5"))
+HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "45"))  # seconds, was 30
+
+# Image upload concurrency and batching
+IMAGE_UPLOAD_WORKERS = int(os.getenv("IMAGE_UPLOAD_WORKERS", "3"))  # number of parallel upload workers
+IMAGE_ENQUEUE_LIMIT = int(os.getenv("IMAGE_ENQUEUE_LIMIT", "500"))   # files enqueued per sync cycle
+SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "20"))  # seconds between sync loop iterations (was 60)
 
 # Server Configuration
 BIND_IP = os.getenv("BIND_IP", "192.168.1.33")

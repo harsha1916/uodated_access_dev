@@ -3,7 +3,7 @@ import time
 import requests
 import logging
 from typing import Optional
-from config import S3_API_URL, MAX_RETRIES, RETRY_DELAY
+from config import S3_API_URL, MAX_RETRIES, RETRY_DELAY, HTTP_TIMEOUT
 
 class ImageUploader:
     def __init__(self):
@@ -32,23 +32,35 @@ class ImageUploader:
                     files = {
                         "singleFile": (os.path.basename(filepath), image_file, "image/jpeg")
                     }
-                    response = requests.post(S3_API_URL, files=files, timeout=30)
+                    response = requests.post(S3_API_URL, files=files, timeout=HTTP_TIMEOUT)
 
                 if response.status_code == 200:
                     self.logger.info(f"Successfully uploaded: {filepath}")
+                    # Try robust parsing of common response shapes
                     try:
                         response_json = response.json()
-                        location = response_json.get("Location")
-                        if location:
-                            self.logger.info(f"S3 Response: {response_json}")
-                            # Don't remove file - keep for gallery display
-                            # os.remove(filepath)
-                            return location
-                        else:
-                            self.logger.error(f"No Location in response: {response_json}")
-                    except ValueError as e:
-                        self.logger.error(f"Invalid JSON response: {e}")
-                        self.logger.error(f"Response content: {response.text}")
+                    except ValueError:
+                        response_json = None
+
+                    location_candidates = []
+                    if isinstance(response_json, dict):
+                        # Common keys: Location, location, url, data.location
+                        location_candidates.append(response_json.get("Location"))
+                        location_candidates.append(response_json.get("location"))
+                        location_candidates.append(response_json.get("url"))
+                        data = response_json.get("data") if isinstance(response_json.get("data"), dict) else None
+                        if isinstance(data, dict):
+                            location_candidates.append(data.get("Location"))
+                            location_candidates.append(data.get("location"))
+                            location_candidates.append(data.get("url"))
+
+                    location = next((loc for loc in location_candidates if isinstance(loc, str) and len(loc) > 0), None)
+
+                    if location:
+                        self.logger.info(f"S3 Response OK: {response_json}")
+                        return location
+                    else:
+                        self.logger.error(f"No usable location in response: {response_json if response_json is not None else response.text}")
                 else:
                     self.logger.error(f"Upload failed {filepath}: {response.status_code} - {response.text}")
 
@@ -59,8 +71,12 @@ class ImageUploader:
 
             attempts += 1
             if attempts < MAX_RETRIES:
-                self.logger.info(f"Retrying upload in {RETRY_DELAY} seconds... (attempt {attempts + 1}/{MAX_RETRIES})")
-                time.sleep(RETRY_DELAY)
+                # Exponential backoff with cap and jitter
+                backoff = min(RETRY_DELAY * (2 ** attempts), 60)
+                jitter = min(3, backoff / 3)
+                wait = backoff + (jitter if attempts % 2 == 0 else -jitter)
+                self.logger.info(f"Retrying upload in {int(wait)} seconds... (attempt {attempts + 1}/{MAX_RETRIES})")
+                time.sleep(max(1, int(wait)))
 
         self.logger.error(f"Giving up on {filepath} after {MAX_RETRIES} attempts.")
         return None
