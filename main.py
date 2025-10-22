@@ -1,226 +1,134 @@
 #!/usr/bin/env python3
-"""
-Camera Capture System with GPIO Triggers and S3 Upload
-
-This application captures images from RTSP cameras when GPIO pins are triggered (LOW state),
-uploads them to S3 in the background, and provides a web interface for viewing captured images.
-
-Features:
-- GPIO hardware triggers (on LOW state)
-- Background threaded S3 uploads
-- Automatic image cleanup after 120 days (configurable)
-- Web interface for viewing images and system status
-- Configurable camera enable/disable
-- Support for 3 cameras: r1 (entry), r2 (exit), r3 (auxiliary)
-"""
-
 import os
 import sys
+import time
 import signal
 import logging
-import argparse
-from pathlib import Path
+import threading
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('camera_system.log')
-    ]
+# Prefer RPi.GPIO; fall back to gpiozero if desired (but we'll stick to RPi.GPIO)
+try:
+    import RPi.GPIO as GPIO
+except Exception as e:
+    print("ERROR: RPi.GPIO not available. Install it or run on Raspberry Pi OS.\n", e)
+    sys.exit(1)
+
+from capture_service import CameraService
+from config import (
+    GPIO_ENABLED,
+    GPIO_TRIGGER_ENABLED,
+    GPIO_BOUNCE_TIME,
+    GPIO_CAMERA_1_PIN,
+    GPIO_CAMERA_2_PIN,
+    GPIO_CAMERA_3_PIN,
 )
 
-logger = logging.getLogger(__name__)
+# ----- Logging setup -----
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger("gpio_daemon")
 
+# ----- Pin→camera map -----
+PIN_TO_CAMERA = {}
 
-def check_dependencies():
-    """Check if all required dependencies are installed."""
-    missing = []
-    
-    try:
-        import cv2
-    except ImportError:
-        missing.append('opencv-python')
-    
-    try:
-        import flask
-    except ImportError:
-        missing.append('flask')
-    
-    try:
-        import flask_cors
-    except ImportError:
-        missing.append('flask-cors')
-    
-    try:
-        import requests
-    except ImportError:
-        missing.append('requests')
-    
-    try:
-        import dotenv
-    except ImportError:
-        missing.append('python-dotenv')
-    
-    if missing:
-        logger.error(f"Missing required dependencies: {', '.join(missing)}")
-        logger.error("Please install them using: pip install -r requirements.txt")
-        return False
-    
-    return True
+def _build_pin_map():
+    """Build the pin-to-camera map from config pins."""
+    return {
+        GPIO_CAMERA_1_PIN: "camera_1",
+        GPIO_CAMERA_2_PIN: "camera_2",
+        GPIO_CAMERA_3_PIN: "camera_3",
+    }
 
+# ----- Cooldown guard to avoid repeated triggers -----
+_LAST_TRIGGER_TS = {}
+COOLDOWN_SEC = 0.8  # short cooldown to avoid multi-captures if bouncing
 
-def setup_environment():
-    """Setup environment and load configuration."""
+# ----- Capture worker -----
+def _capture_async(service: CameraService, camera_key: str):
     try:
-        from dotenv import load_dotenv
-        
-        # Load .env file if it exists
-        env_file = Path('.env')
-        if env_file.exists():
-            load_dotenv()
-            logger.info("Loaded configuration from .env file")
+        logger.info(f"Trigger received -> {camera_key}: capturing...")
+        result = service.capture_by_key(camera_key)  # queues background S3 upload internally
+        if result:
+            logger.info(
+                f"Captured {result['filename']} at {result['local_path']} (camera={result['camera_name']})"
+            )
         else:
-            logger.warning(".env file not found, using default configuration")
-            logger.info("You can create a .env file based on .env.example")
-        
-        # Import and log configuration
-        from config import (
-            BIND_IP, BIND_PORT, GPIO_ENABLED, GPIO_TRIGGER_ENABLED,
-            UPLOAD_ENABLED, BACKGROUND_UPLOAD, IMAGE_RETENTION_DAYS,
-            CAMERA_1_ENABLED, CAMERA_2_ENABLED, CAMERA_3_ENABLED
-        )
-        
-        logger.info("=== System Configuration ===")
-        logger.info(f"Web Server: {BIND_IP}:{BIND_PORT}")
-        logger.info(f"GPIO Enabled: {GPIO_ENABLED}")
-        logger.info(f"GPIO Triggering: {GPIO_TRIGGER_ENABLED}")
-        logger.info(f"Upload Enabled: {UPLOAD_ENABLED}")
-        logger.info(f"Background Upload: {BACKGROUND_UPLOAD}")
-        logger.info(f"Image Retention: {IMAGE_RETENTION_DAYS} days")
-        logger.info(f"Camera 1 (r1/entry): {'ENABLED' if CAMERA_1_ENABLED else 'DISABLED'}")
-        logger.info(f"Camera 2 (r2/exit): {'ENABLED' if CAMERA_2_ENABLED else 'DISABLED'}")
-        logger.info(f"Camera 3 (r3/auxiliary): {'ENABLED' if CAMERA_3_ENABLED else 'DISABLED'}")
-        logger.info("===========================")
-        
-        return True
-        
+            logger.warning(f"Capture failed for {camera_key}")
     except Exception as e:
-        logger.error(f"Error setting up environment: {e}", exc_info=True)
-        return False
+        logger.exception(f"Unhandled error in capture worker for {camera_key}: {e}")
 
+def _button_callback_factory(service: CameraService, camera_key: str):
+    def _inner(channel_pin):
+        now = time.time()
+        last = _LAST_TRIGGER_TS.get(camera_key, 0)
+        if now - last < COOLDOWN_SEC:
+            # ignore very fast repeats
+            return
+        _LAST_TRIGGER_TS[camera_key] = now
 
-def main():
-    """Main application entry point."""
-    parser = argparse.ArgumentParser(description='Camera Capture System')
-    parser.add_argument('--test-capture', action='store_true',
-                        help='Test capture from all enabled cameras and exit')
-    parser.add_argument('--test-gpio', action='store_true',
-                        help='Test GPIO setup and exit')
-    parser.add_argument('--cleanup-now', action='store_true',
-                        help='Run cleanup immediately and exit')
-    args = parser.parse_args()
-    
-    logger.info("=== Camera Capture System Starting ===")
-    
-    # Check dependencies
-    if not check_dependencies():
-        sys.exit(1)
-    
-    # Setup environment
-    if not setup_environment():
-        sys.exit(1)
-    
+        # Run capture in a thread to keep GPIO callback lightweight
+        t = threading.Thread(target=_capture_async, args=(service, camera_key), daemon=True)
+        t.start()
+    return _inner
+
+def _setup_gpio(pin_to_camera: dict):
+    """
+    Configure GPIO for 3 push buttons using internal pull-ups.
+    Wiring: one side of button to the GPIO pin, the other side to GND.
+    We trigger on FALLING edge (pressed -> goes to ground).
+    """
+    GPIO.setmode(GPIO.BCM)  # use BCM numbering so 18,19,20 match config exactly
+    for pin, camera_key in pin_to_camera.items():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # internal pull-up
+        GPIO.add_event_detect(
+            pin,
+            GPIO.FALLING,
+            bouncetime=GPIO_BOUNCE_TIME,
+            callback=_button_callback_factory(service, camera_key)
+        )
+        logger.info(f"Configured GPIO pin {pin} for {camera_key}")
+
+def _cleanup():
     try:
-        # Test mode: Capture
-        if args.test_capture:
-            logger.info("Running test capture mode...")
-            from capture_service import CameraService
-            
-            service = CameraService()
-            
-            for camera_key in ['camera_1', 'camera_2', 'camera_3']:
-                logger.info(f"Testing {camera_key}...")
-                result = service.capture_by_key(camera_key)
-                if result:
-                    logger.info(f"✓ {camera_key} test successful: {result['filename']}")
-                else:
-                    logger.error(f"✗ {camera_key} test failed")
-            
-            return 0
-        
-        # Test mode: GPIO
-        if args.test_gpio:
-            logger.info("Running GPIO test mode...")
-            from gpio_service import GPIOService
-            
-            gpio = GPIOService()
-            if gpio.is_available():
-                logger.info("✓ GPIO service initialized successfully")
-                
-                # Check pin states
-                for camera_key in ['camera_1', 'camera_2', 'camera_3']:
-                    state = gpio.get_pin_state(camera_key)
-                    logger.info(f"{camera_key} pin state: {state}")
-                
-                gpio.cleanup()
-            else:
-                logger.error("✗ GPIO service not available")
-            
-            return 0
-        
-        # Cleanup mode
-        if args.cleanup_now:
-            logger.info("Running cleanup mode...")
-            from cleanup_service import CleanupService
-            
-            cleanup = CleanupService()
-            deleted = cleanup.run_cleanup()
-            logger.info(f"✓ Cleanup completed: {deleted} images deleted")
-            
-            return 0
-        
-        # Normal mode: Start web application
-        logger.info("Starting web application...")
-        from web_app import app, init_services, cleanup_on_shutdown
-        from config import BIND_IP, BIND_PORT
-        
-        # Initialize all services
-        init_services()
-        
-        # Setup signal handlers for graceful shutdown
-        def signal_handler(sig, frame):
-            logger.info(f"Received signal {sig}, shutting down...")
-            cleanup_on_shutdown()
-            sys.exit(0)
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
-        # Start Flask application
-        logger.info(f"Web interface available at http://{BIND_IP}:{BIND_PORT}")
-        logger.info("Press Ctrl+C to stop")
-        
-        app.run(
-            host=BIND_IP,
-            port=BIND_PORT,
-            debug=False,
-            threaded=True,
-            use_reloader=False  # Disable reloader to prevent double initialization
-        )
-        
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        return 1
+        GPIO.cleanup()
+    except Exception:
+        pass
+
+def _handle_exit(signum, frame):
+    logger.info(f"Received signal {signum}. Shutting down...")
+    try:
+        service.stop_upload_service(wait_for_completion=False)
+    except Exception:
+        pass
+    _cleanup()
+    sys.exit(0)
+
+if __name__ == "__main__":
+    if not GPIO_ENABLED or not GPIO_TRIGGER_ENABLED:
+        logger.error("GPIO triggering is disabled by configuration. Set GPIO_ENABLED=true and GPIO_TRIGGER_ENABLED=true in your .env")
+        sys.exit(1)
+
+    # Build pin map and log
+    PIN_TO_CAMERA = _build_pin_map()
+    logger.info(f"Pin map: {PIN_TO_CAMERA}")
+
+    # Start camera service + background uploader
+    service = CameraService()  # handles local save + queue upload
+    service.start_upload_service()  # starts background + retry workers
+
+    # Setup GPIO and callbacks
+    _setup_gpio(PIN_TO_CAMERA)
+
+    # Signal handling for clean shutdown
+    signal.signal(signal.SIGINT, _handle_exit)
+    signal.signal(signal.SIGTERM, _handle_exit)
+
+    logger.info("GPIO daemon is running. Press the physical buttons to capture images.")
+    try:
+        while True:
+            time.sleep(1)
     finally:
-        logger.info("=== Camera Capture System Stopped ===")
-    
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())
-
+        _handle_exit(signal.SIGTERM, None)
