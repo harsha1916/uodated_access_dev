@@ -117,6 +117,16 @@ def main():
     show_wiring_guide()
     
     try:
+        # Cleanup any previous GPIO usage
+        print("🔧 Cleaning up any previous GPIO state...")
+        try:
+            GPIO.cleanup()
+            print("  ✓ Previous GPIO state cleaned")
+        except:
+            print("  ✓ No previous GPIO state to clean")
+        
+        print()
+        
         # Setup GPIO
         print("🔧 Initializing GPIO...")
         GPIO.setmode(GPIO.BCM)
@@ -151,51 +161,106 @@ def main():
         
         # Add event detection (trigger on FALLING edge = button press)
         print("🎯 Adding event detection for button presses...")
-        GPIO.add_event_detect(PIN_CAMERA_1, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
-        GPIO.add_event_detect(PIN_CAMERA_2, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
-        GPIO.add_event_detect(PIN_CAMERA_3, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
         
-        print("✓ Event detection enabled")
+        try:
+            GPIO.add_event_detect(PIN_CAMERA_1, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_1}")
+        except RuntimeError as e:
+            print(f"  ⚠️  Warning for GPIO {PIN_CAMERA_1}: {e}")
+            print(f"     Trying to remove and re-add...")
+            try:
+                GPIO.remove_event_detect(PIN_CAMERA_1)
+            except:
+                pass
+            GPIO.add_event_detect(PIN_CAMERA_1, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_1}")
+        
+        try:
+            GPIO.add_event_detect(PIN_CAMERA_2, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_2}")
+        except RuntimeError as e:
+            print(f"  ⚠️  Warning for GPIO {PIN_CAMERA_2}: {e}")
+            print(f"     Trying to remove and re-add...")
+            try:
+                GPIO.remove_event_detect(PIN_CAMERA_2)
+            except:
+                pass
+            GPIO.add_event_detect(PIN_CAMERA_2, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_2}")
+        
+        try:
+            GPIO.add_event_detect(PIN_CAMERA_3, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_3}")
+        except RuntimeError as e:
+            print(f"  ⚠️  Warning for GPIO {PIN_CAMERA_3}: {e}")
+            print(f"     Trying to remove and re-add...")
+            try:
+                GPIO.remove_event_detect(PIN_CAMERA_3)
+            except:
+                pass
+            GPIO.add_event_detect(PIN_CAMERA_3, GPIO.FALLING, callback=button_pressed, bouncetime=BOUNCE_TIME)
+            print(f"  ✓ Event detection added for GPIO {PIN_CAMERA_3}")
+        
+        print()
+        print("✓ Event detection enabled on all pins")
         print()
         
         print("=" * 70)
-        print("🟢 MONITORING ACTIVE - Press your buttons!")
+        print("🟢 MONITORING ACTIVE - Press your buttons NOW!")
         print("=" * 70)
         print()
         print("📌 What to do:")
         print("   1. Press button connected to GPIO 18 → Should trigger Camera 1")
         print("   2. Press button connected to GPIO 19 → Should trigger Camera 2")
         print("   3. Press button connected to GPIO 20 → Should trigger Camera 3")
-        print()
-        print("   You should see trigger messages with 🔔 bells!")
+print()
+        print("   You should see 🔔 trigger messages IMMEDIATELY when pressed!")
         print()
         print("Press Ctrl+C to stop the test")
         print("=" * 70)
         print()
         
-        # Monitor continuously
-        last_heartbeat = time.time()
-        heartbeat_count = 0
+        # Monitor continuously with live pin state display
+        last_state = {PIN_CAMERA_1: None, PIN_CAMERA_2: None, PIN_CAMERA_3: None}
+        check_count = 0
+        
+        print("👀 Watching pins continuously (checking every 0.1 seconds)...")
+        print()
         
         while True:
-            time.sleep(1)
+            # Check pins frequently (10 times per second)
+            time.sleep(0.1)
+            check_count += 1
             
-            # Show heartbeat every 5 seconds
-            if time.time() - last_heartbeat > 5:
-                heartbeat_count += 1
-                total_triggers = sum(t['count'] for t in triggers.values())
-                print(f"💚 Waiting for button press... ({heartbeat_count * 5}s elapsed, {total_triggers} total triggers)")
-                last_heartbeat = time.time()
+            # Read all pin states
+            for pin, info in triggers.items():
+                current_state = GPIO.input(pin)
                 
-                # Show current pin states every 30 seconds
-                if heartbeat_count % 6 == 0:
-                    print()
-                    print("Current States:")
-                    for pin, info in triggers.items():
-                        state = GPIO.input(pin)
-                        state_text = "PRESSED" if state == GPIO.LOW else "released"
-                        print(f"  GPIO {pin}: {state_text} (Count: {info['count']})")
-                    print()
+                # Detect state changes
+                if last_state[pin] is not None and current_state != last_state[pin]:
+                    if current_state == GPIO.LOW:
+                        # Button just pressed!
+                        print(f"⬇️  BUTTON {pin} PRESSED (going LOW)")
+                    else:
+                        # Button just released!
+                        print(f"⬆️  BUTTON {pin} RELEASED (going HIGH)")
+                
+                last_state[pin] = current_state
+            
+            # Show heartbeat every 50 checks (5 seconds)
+            if check_count % 50 == 0:
+                total_triggers = sum(t['count'] for t in triggers.values())
+                print(f"💚 Monitoring... (Checked {check_count} times, {total_triggers} triggers detected)")
+                
+            # Show detailed status every 300 checks (30 seconds)
+            if check_count % 300 == 0:
+                print()
+                print("📊 Current Button States:")
+                for pin, info in triggers.items():
+                    state = GPIO.input(pin)
+                    state_text = "🔴 PRESSED" if state == GPIO.LOW else "⚪ released"
+                    print(f"  GPIO {pin} ({info['name']}): {state_text} | Trigger Count: {info['count']}")
+                print()
     
     except KeyboardInterrupt:
         print()

@@ -144,13 +144,30 @@ class GPIOService:
         try:
             # Add event detection for all configured pins (falling edge = LOW state)
             for pin, camera_key in self.pin_mapping.items():
-                GPIO.add_event_detect(
-                    pin,
-                    GPIO.FALLING,  # Trigger on transition to LOW
-                    callback=self._gpio_callback,
-                    bouncetime=GPIO_BOUNCE_TIME
-                )
-                self.logger.info(f"Started monitoring GPIO pin {pin} for {camera_key}")
+                try:
+                    GPIO.add_event_detect(
+                        pin,
+                        GPIO.FALLING,  # Trigger on transition to LOW
+                        callback=self._gpio_callback,
+                        bouncetime=GPIO_BOUNCE_TIME
+                    )
+                    self.logger.info(f"Started monitoring GPIO pin {pin} for {camera_key}")
+                    
+                except RuntimeError as e:
+                    # Pin already has edge detection - remove and re-add
+                    self.logger.warning(f"GPIO pin {pin} already has edge detection, removing and re-adding...")
+                    try:
+                        GPIO.remove_event_detect(pin)
+                    except:
+                        pass
+                    
+                    GPIO.add_event_detect(
+                        pin,
+                        GPIO.FALLING,
+                        callback=self._gpio_callback,
+                        bouncetime=GPIO_BOUNCE_TIME
+                    )
+                    self.logger.info(f"Started monitoring GPIO pin {pin} for {camera_key} (after cleanup)")
             
             self.logger.info("GPIO monitoring started successfully")
             return True
