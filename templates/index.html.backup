@@ -392,105 +392,6 @@
             font-weight: bold;
         }
         
-        /* GPIO Trigger Indicators */
-        .trigger-indicator {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 15px;
-            background: #f5f5f5;
-            border-radius: 10px;
-            margin-bottom: 10px;
-            transition: all 0.3s;
-        }
-        
-        .trigger-light {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background: #ddd;
-            transition: all 0.3s;
-            box-shadow: 0 0 5px rgba(0,0,0,0.1);
-        }
-        
-        .trigger-indicator.active {
-            background: #e3f2fd;
-            border: 2px solid #2196F3;
-        }
-        
-        .trigger-indicator.active .trigger-light {
-            background: #4CAF50;
-            box-shadow: 0 0 20px #4CAF50, 0 0 40px #4CAF50;
-            animation: pulse 1s ease-in-out infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.1); opacity: 0.8; }
-        }
-        
-        /* Configuration Section */
-        .config-container {
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        
-        .config-section {
-            margin-bottom: 30px;
-            padding: 20px;
-            background: #f9f9f9;
-            border-radius: 10px;
-        }
-        
-        .config-section h3 {
-            margin-bottom: 15px;
-            color: #333;
-        }
-        
-        .config-item {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        }
-        
-        .config-label {
-            font-weight: 600;
-            color: #555;
-            margin-bottom: 5px;
-            display: block;
-        }
-        
-        .config-input {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #e0e0e0;
-            border-radius: 5px;
-            font-size: 14px;
-            transition: border-color 0.3s;
-        }
-        
-        .config-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        .config-checkbox {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px;
-        }
-        
-        .config-checkbox input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
-            cursor: pointer;
-        }
-        
         @media (max-width: 768px) {
             .grid {
                 grid-template-columns: 1fr;
@@ -524,11 +425,9 @@
         
         <!-- Tabs -->
         <div class="tabs">
-            <button class="tab-btn active" onclick="showTab('dashboard')">🏠 Dashboard</button>
-            <button class="tab-btn" onclick="showTab('config')">⚙️ Configuration</button>
-            <button class="tab-btn" onclick="showTab('images')">🖼️ Images</button>
-            <button class="tab-btn" onclick="showTab('storage')">💾 Storage</button>
-            <button class="tab-btn" onclick="showTab('by-date')">📅 By Date</button>
+            <button class="tab-btn active" onclick="showTab('dashboard')">📊 Dashboard</button>
+            <button class="tab-btn" onclick="showTab('storage')">💾 Storage Analysis</button>
+            <button class="tab-btn" onclick="showTab('by-date')">📅 View by Date</button>
         </div>
         
         <!-- Dashboard Tab -->
@@ -569,34 +468,6 @@
                     <h2>🔌 GPIO Status</h2>
                     <div id="gpio-status">Loading...</div>
                 </div>
-                
-                <!-- GPIO Triggers Card -->
-                <div class="card">
-                    <h2>⚡ GPIO Triggers</h2>
-                    <div id="gpio-triggers">
-                        <div class="trigger-indicator" id="trigger-camera-1">
-                            <span class="trigger-light"></span>
-                            <div>
-                                <strong>Camera 1 (r1/Entry)</strong>
-                                <div style="font-size: 12px; color: #666;">Pin 18 - Count: <span id="trigger-count-1">0</span></div>
-                            </div>
-                        </div>
-                        <div class="trigger-indicator" id="trigger-camera-2">
-                            <span class="trigger-light"></span>
-                            <div>
-                                <strong>Camera 2 (r2/Exit)</strong>
-                                <div style="font-size: 12px; color: #666;">Pin 19 - Count: <span id="trigger-count-2">0</span></div>
-                            </div>
-                        </div>
-                        <div class="trigger-indicator" id="trigger-camera-3">
-                            <span class="trigger-light"></span>
-                            <div>
-                                <strong>Camera 3 (r3/Auxiliary)</strong>
-                                <div style="font-size: 12px; color: #666;">Pin 20 - Count: <span id="trigger-count-3">0</span></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             
                 <!-- Manual Capture Card -->
                 <div class="card">
@@ -609,37 +480,8 @@
                     </div>
                 </div>
             </div>
-        </div>
-        
-        <!-- Configuration Tab -->
-        <div id="config-tab" class="tab-content">
-            <div class="config-container">
-                <h2>⚙️ System Configuration</h2>
-                
-                <!-- Camera Configuration -->
-                <div class="config-section">
-                    <h3>📹 Camera Settings</h3>
-                    <div id="config-cameras">Loading...</div>
-                </div>
-                
-                <!-- GPIO Configuration -->
-                <div class="config-section">
-                    <h3>🔌 GPIO Settings</h3>
-                    <div id="config-gpio">Loading...</div>
-                </div>
-                
-                <!-- Upload Configuration -->
-                <div class="config-section">
-                    <h3>☁️ Upload Settings</h3>
-                    <div id="config-upload">Loading...</div>
-                </div>
-                
-                <button class="btn btn-primary" style="width: 100%; max-width: 300px; margin: 20px auto; display: block;" onclick="saveConfiguration()">💾 Save Configuration</button>
-            </div>
-        </div>
-        
-        <!-- Images Tab -->
-        <div id="images-tab" class="tab-content">
+            
+            <!-- Image Gallery -->
             <div class="gallery">
                 <h2>🖼️ Recent Images</h2>
                 <div class="gallery-controls">
@@ -720,16 +562,12 @@
             event.target.classList.add('active');
             
             // Load data for tab
-            if (tabName === 'config') {
-                loadConfiguration();
-            } else if (tabName === 'storage') {
+            if (tabName === 'storage') {
                 loadStorageAnalysis();
             } else if (tabName === 'by-date') {
                 // Set date picker to today
                 const today = new Date().toISOString().split('T')[0];
                 document.getElementById('date-picker').value = today;
-            } else if (tabName === 'images') {
-                refreshImages();
             }
         }
         
@@ -737,14 +575,12 @@
         updateStatus();
         updateStats();
         updateHealth();
-        updateGPIOTriggers();
         loadImages(1);
         
-        // Auto-refresh intervals
-        setInterval(updateStatus, 10000);      // Every 10 seconds
-        setInterval(updateStats, 10000);       // Every 10 seconds
-        setInterval(updateHealth, 10000);      // Every 10 seconds
-        setInterval(updateGPIOTriggers, 1000); // Every 1 second for responsive triggers!
+        // Auto-refresh every 10 seconds
+        setInterval(updateStatus, 10000);
+        setInterval(updateStats, 10000);
+        setInterval(updateHealth, 10000);
         
         async function updateStatus() {
             try {
@@ -963,186 +799,6 @@
                 }
             } catch (error) {
                 alert(`Error: ${error.message}`);
-            }
-        }
-        
-        async function updateGPIOTriggers() {
-            try {
-                const response = await fetch('/api/gpio/status');
-                const data = await response.json();
-                
-                if (data.success && data.trigger_events) {
-                    for (const [camera, events] of Object.entries(data.trigger_events)) {
-                        const cameraNum = camera.split('_')[1];
-                        const indicator = document.getElementById(`trigger-${camera}`);
-                        const countSpan = document.getElementById(`trigger-count-${cameraNum}`);
-                        
-                        if (indicator && countSpan) {
-                            // Update count
-                            countSpan.textContent = events.trigger_count || 0;
-                            
-                            // Show animation if active
-                            if (events.active) {
-                                indicator.classList.add('active');
-                            } else {
-                                indicator.classList.remove('active');
-                            }
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('Error updating GPIO triggers:', error);
-            }
-        }
-        
-        async function loadConfiguration() {
-            try {
-                const response = await fetch('/api/config/get');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const config = data.config;
-                    
-                    // Render camera configuration
-                    let cameraHTML = '';
-                    for (const [key, camera] of Object.entries(config.cameras)) {
-                        const num = key.split('_')[1];
-                        cameraHTML += `
-                            <div class="config-item">
-                                <div class="config-checkbox">
-                                    <input type="checkbox" id="${key}-enabled" ${camera.enabled ? 'checked' : ''}>
-                                    <label for="${key}-enabled"><strong>${camera.name} - ${key.toUpperCase()}</strong></label>
-                                </div>
-                                <div style="margin-top: 10px;">
-                                    <label class="config-label">IP Address</label>
-                                    <input type="text" class="config-input" id="${key}-ip" value="${camera.ip}" placeholder="192.168.1.20${num}">
-                                </div>
-                                <div style="margin-top: 10px;">
-                                    <label class="config-label">Custom RTSP URL (optional)</label>
-                                    <input type="text" class="config-input" id="${key}-rtsp" value="${camera.rtsp_url}" placeholder="rtsp://username:password@ip:port/stream">
-                                </div>
-                            </div>
-                        `;
-                    }
-                    
-                    // Add common camera credentials
-                    cameraHTML += `
-                        <div class="config-item">
-                            <h4 style="margin-bottom: 10px;">Camera Credentials</h4>
-                            <div style="margin-bottom: 10px;">
-                                <label class="config-label">Username</label>
-                                <input type="text" class="config-input" id="camera-username" value="${config.cameras.camera_1.username}">
-                            </div>
-                            <div>
-                                <label class="config-label">Password</label>
-                                <input type="password" class="config-input" id="camera-password" placeholder="Leave as **** to keep current">
-                            </div>
-                        </div>
-                    `;
-                    
-                    document.getElementById('config-cameras').innerHTML = cameraHTML;
-                    
-                    // Render GPIO configuration
-                    const gpioHTML = `
-                        <div class="config-item">
-                            <div class="config-checkbox">
-                                <input type="checkbox" id="gpio-trigger-enabled" ${config.gpio.trigger_enabled ? 'checked' : ''}>
-                                <label for="gpio-trigger-enabled"><strong>Enable GPIO Triggering</strong></label>
-                            </div>
-                            <p style="font-size: 12px; color: #666; margin-top: 5px;">
-                                Note: GPIO_ENABLED requires restart to change. Current: ${config.gpio.enabled ? 'ENABLED' : 'DISABLED'}
-                            </p>
-                            <div style="margin-top: 10px; font-size: 13px; color: #666;">
-                                <strong>Pin Assignments:</strong><br>
-                                Camera 1 (r1): GPIO ${config.gpio.pins.camera_1}<br>
-                                Camera 2 (r2): GPIO ${config.gpio.pins.camera_2}<br>
-                                Camera 3 (r3): GPIO ${config.gpio.pins.camera_3}
-                            </div>
-                        </div>
-                    `;
-                    
-                    document.getElementById('config-gpio').innerHTML = gpioHTML;
-                    
-                    // Render upload configuration
-                    const uploadHTML = `
-                        <div class="config-item">
-                            <div class="config-checkbox">
-                                <input type="checkbox" id="upload-enabled" ${config.upload.enabled ? 'checked' : ''}>
-                                <label for="upload-enabled"><strong>Enable S3 Uploads</strong></label>
-                            </div>
-                        </div>
-                        <div class="config-item">
-                            <label class="config-label">S3 API URL</label>
-                            <input type="text" class="config-input" id="s3-url" value="${config.upload.s3_url}">
-                        </div>
-                    `;
-                    
-                    document.getElementById('config-upload').innerHTML = uploadHTML;
-                }
-            } catch (error) {
-                console.error('Error loading configuration:', error);
-            }
-        }
-        
-        async function saveConfiguration() {
-            try {
-                // Collect configuration from form
-                const configData = {
-                    cameras: {},
-                    gpio: {},
-                    upload: {}
-                };
-                
-                // Camera settings
-                for (const key of ['camera_1', 'camera_2', 'camera_3']) {
-                    configData.cameras[key] = {
-                        enabled: document.getElementById(`${key}-enabled`)?.checked || false,
-                        ip: document.getElementById(`${key}-ip`)?.value || '',
-                        rtsp_url: document.getElementById(`${key}-rtsp`)?.value || ''
-                    };
-                }
-                
-                // Camera credentials
-                const username = document.getElementById('camera-username')?.value;
-                const password = document.getElementById('camera-password')?.value;
-                
-                if (username) {
-                    configData.cameras.camera_1.username = username;
-                }
-                if (password && password !== '****') {
-                    configData.cameras.camera_1.password = password;
-                }
-                
-                // GPIO settings
-                configData.gpio.trigger_enabled = document.getElementById('gpio-trigger-enabled')?.checked || false;
-                
-                // Upload settings
-                configData.upload.enabled = document.getElementById('upload-enabled')?.checked || false;
-                configData.upload.s3_url = document.getElementById('s3-url')?.value || '';
-                
-                // Send to API
-                const response = await fetch('/api/config/update', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(configData)
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert(`✓ Configuration saved successfully!\n\n${result.message}\n\nChanges applied immediately!`);
-                    // Refresh status
-                    updateStatus();
-                    updateHealth();
-                } else {
-                    alert(`Failed to save configuration: ${result.error}`);
-                }
-                
-            } catch (error) {
-                alert(`Error saving configuration: ${error.message}`);
-                console.error('Error:', error);
             }
         }
         

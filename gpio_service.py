@@ -22,6 +22,14 @@ class GPIOService:
         self.logger = logging.getLogger(__name__)
         self.initialized = False
         self.callbacks = {}
+        self._lock = threading.Lock()
+        
+        # Track GPIO trigger events
+        self.trigger_events = {
+            'camera_1': {'last_trigger': None, 'trigger_count': 0, 'active': False},
+            'camera_2': {'last_trigger': None, 'trigger_count': 0, 'active': False},
+            'camera_3': {'last_trigger': None, 'trigger_count': 0, 'active': False}
+        }
         
         # Check if GPIO is available and enabled
         if not GPIO_AVAILABLE:
@@ -83,6 +91,15 @@ class GPIOService:
             if not camera_key:
                 self.logger.warning(f"Unknown GPIO pin triggered: {channel}")
                 return
+            
+            # Track trigger event
+            import time
+            with self._lock:
+                self.trigger_events[camera_key]['last_trigger'] = time.time()
+                self.trigger_events[camera_key]['trigger_count'] += 1
+                self.trigger_events[camera_key]['active'] = True
+            
+            self.logger.info(f"🔔 GPIO TRIGGER: {camera_key} (pin {channel}) - Count: {self.trigger_events[camera_key]['trigger_count']}")
                 
             # Get the callback for this camera
             callback = self.callbacks.get(camera_key)
@@ -99,8 +116,16 @@ class GPIOService:
             )
             thread.start()
             
+            # Reset active flag after 2 seconds
+            threading.Timer(2.0, self._reset_trigger_active, args=(camera_key,)).start()
+            
         except Exception as e:
             self.logger.error(f"Error in GPIO callback: {e}", exc_info=True)
+    
+    def _reset_trigger_active(self, camera_key: str):
+        """Reset the active flag after trigger animation."""
+        with self._lock:
+            self.trigger_events[camera_key]['active'] = False
     
     def _execute_callback(self, camera_key: str, callback: Callable):
         """Execute the callback in a separate thread."""
@@ -188,4 +213,16 @@ class GPIOService:
                 self.logger.error(f"Error reading GPIO pin {pin}: {e}")
         
         return None
+    
+    def get_trigger_events(self) -> dict:
+        """Get trigger event information for all cameras."""
+        with self._lock:
+            return {
+                camera: {
+                    'last_trigger': events['last_trigger'],
+                    'trigger_count': events['trigger_count'],
+                    'active': events['active']
+                }
+                for camera, events in self.trigger_events.items()
+            }
 

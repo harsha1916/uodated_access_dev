@@ -416,13 +416,131 @@ def gpio_status():
             'camera_3': gpio_service.get_pin_state('camera_3')
         }
         
+        # Get trigger events for animation
+        trigger_events = gpio_service.get_trigger_events()
+        
         return jsonify({
             'success': True,
-            'pin_states': pin_states
+            'pin_states': pin_states,
+            'trigger_events': trigger_events
         })
         
     except Exception as e:
         logger.error(f"Error getting GPIO status: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/get')
+@login_required
+def get_config():
+    """Get current configuration."""
+    try:
+        config_data = {
+            'cameras': {},
+            'gpio': {
+                'enabled': GPIO_ENABLED,
+                'trigger_enabled': GPIO_TRIGGER_ENABLED,
+                'pins': {
+                    'camera_1': os.getenv('GPIO_CAMERA_1_PIN', '18'),
+                    'camera_2': os.getenv('GPIO_CAMERA_2_PIN', '19'),
+                    'camera_3': os.getenv('GPIO_CAMERA_3_PIN', '20')
+                }
+            },
+            'upload': {
+                'enabled': UPLOAD_ENABLED,
+                'background': BACKGROUND_UPLOAD,
+                's3_url': os.getenv('S3_API_URL', '')
+            }
+        }
+        
+        # Get camera configuration
+        for camera_key, camera_name in CAMERA_NAMES.items():
+            camera_num = camera_key.split('_')[1]
+            config_data['cameras'][camera_key] = {
+                'name': camera_name,
+                'enabled': is_camera_enabled(camera_key),
+                'ip': os.getenv(f'CAMERA_{camera_num}_IP', ''),
+                'rtsp_url': os.getenv(f'CAMERA_{camera_num}_RTSP', ''),
+                'username': os.getenv('CAMERA_USERNAME', 'admin'),
+                'password': '****'  # Don't expose password
+            }
+        
+        return jsonify({
+            'success': True,
+            'config': config_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting config: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/update', methods=['POST'])
+@login_required
+def update_config():
+    """Update configuration and save to .env file."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        env_file = '.env'
+        updates = {}
+        
+        # Update camera settings
+        if 'cameras' in data:
+            for camera_key, settings in data['cameras'].items():
+                camera_num = camera_key.split('_')[1]
+                
+                if 'enabled' in settings:
+                    updates[f'CAMERA_{camera_num}_ENABLED'] = str(settings['enabled']).lower()
+                
+                if 'ip' in settings:
+                    updates[f'CAMERA_{camera_num}_IP'] = settings['ip']
+                
+                if 'rtsp_url' in settings:
+                    updates[f'CAMERA_{camera_num}_RTSP'] = settings['rtsp_url']
+                
+                if 'username' in settings:
+                    updates['CAMERA_USERNAME'] = settings['username']
+                
+                if 'password' in settings and settings['password'] != '****':
+                    updates['CAMERA_PASSWORD'] = settings['password']
+        
+        # Update GPIO settings
+        if 'gpio' in data:
+            if 'enabled' in data['gpio']:
+                updates['GPIO_ENABLED'] = str(data['gpio']['enabled']).lower()
+            
+            if 'trigger_enabled' in data['gpio']:
+                updates['GPIO_TRIGGER_ENABLED'] = str(data['gpio']['trigger_enabled']).lower()
+        
+        # Update upload settings
+        if 'upload' in data:
+            if 'enabled' in data['upload']:
+                updates['UPLOAD_ENABLED'] = str(data['upload']['enabled']).lower()
+            
+            if 's3_url' in data['upload']:
+                updates['S3_API_URL'] = data['upload']['s3_url']
+        
+        # Save to .env file
+        for key, value in updates.items():
+            set_key(env_file, key, value)
+        
+        # Reload environment
+        load_dotenv(override=True)
+        
+        logger.info(f"Configuration updated: {list(updates.keys())}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Configuration updated: {len(updates)} settings changed',
+            'updated_keys': list(updates.keys())
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating config: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
