@@ -3,4 +3,4 @@ gpiozero==2.0.1
 RPi.GPIO==0.7.1
 python-dotenv==1.0.1
 requests==2.32.3
-bcrypt==4.1.1
+# bcrypt==4.1.1  # Replaced with SHA256

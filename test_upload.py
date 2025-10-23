@@ -46,20 +46,25 @@ if not UPLOAD_ENDPOINT:
 TEST_IMAGE = "test_upload.jpg"
 print("Creating test image...")
 
-# Create minimal JPEG (base64 encoded minimal JPEG)
-import base64
-MINIMAL_JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a"
-    "HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIy"
-    "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIA"
-    "AhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEB"
-    "AQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAA/9k="
-)
+# Create minimal JPEG using PIL (more reliable)
+try:
+    from PIL import Image
+    # Create 1x1 pixel image
+    img = Image.new('RGB', (1, 1), color='red')
+    img.save(TEST_IMAGE, 'JPEG', quality=95)
+    print(f"✓ Test image created using PIL: {TEST_IMAGE}")
+except ImportError:
+    # Fallback: create minimal JPEG manually
+    print("PIL not available, creating minimal JPEG manually...")
+    # Minimal JPEG header + 1x1 pixel data
+    minimal_jpeg = (
+        b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00'
+        b'\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\' ",#\x1c\x1c(7),01444\x1f\'9=82<.342\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x01\x01\x11\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\xff\xc4\x00\x14\x10\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00\x3f\x00\xaa\xff\xd9'
+    )
+    with open(TEST_IMAGE, "wb") as f:
+        f.write(minimal_jpeg)
+    print(f"✓ Test image created manually: {TEST_IMAGE}")
 
-with open(TEST_IMAGE, "wb") as f:
-    f.write(MINIMAL_JPEG)
-
-print(f"✓ Test image created: {TEST_IMAGE}")
 print()
 
 # Test each field name

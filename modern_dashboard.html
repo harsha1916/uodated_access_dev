@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CamCap Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { 
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); 
+  min-height: 100vh;
+  color: #2c3e50;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.header { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 25px 30px; 
+  border-radius: 20px; 
+  margin-bottom: 25px; 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.header h1 { 
+  font-size: 28px; 
+  font-weight: 700; 
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tabs { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 8px; 
+  border-radius: 20px; 
+  margin-bottom: 25px; 
+  display: flex; 
+  gap: 8px; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.tab-btn { 
+  flex: 1; 
+  padding: 15px 20px; 
+  background: transparent; 
+  border: none; 
+  border-radius: 15px; 
+  cursor: pointer; 
+  font-size: 15px; 
+  font-weight: 600; 
+  transition: all 0.3s ease;
+  color: #7f8c8d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.tab-btn:hover { 
+  background: rgba(52, 152, 219, 0.1); 
+  color: #3498db;
+}
+.tab-btn.active { 
+  background: linear-gradient(135deg, #3498db, #2980b9); 
+  color: white; 
+  box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+.card { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 25px; 
+  border-radius: 20px; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.card:hover { 
+  transform: translateY(-2px); 
+  box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+}
+.card h3 { 
+  margin-bottom: 20px; 
+  color: #2c3e50; 
+  font-size: 18px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stat-row { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  padding: 12px 0; 
+  border-bottom: 1px solid rgba(236, 240, 241, 0.8); 
+  transition: background 0.2s ease;
+}
+.stat-row:hover { background: rgba(236, 240, 241, 0.3); }
+.stat-row:last-child { border-bottom: none; }
+.stat-label { color: #7f8c8d; font-weight: 500; }
+.stat-value { font-weight: 600; color: #2c3e50; }
+.btn { 
+  padding: 12px 24px; 
+  background: linear-gradient(135deg, #3498db, #2980b9); 
+  color: white; 
+  border: none; 
+  border-radius: 12px; 
+  cursor: pointer; 
+  font-size: 14px; 
+  font-weight: 600;
+  margin: 5px; 
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn:hover { 
+  background: linear-gradient(135deg, #2980b9, #1f4e79); 
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+}
+.btn-danger { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+.btn-danger:hover { background: linear-gradient(135deg, #c0392b, #a93226); }
+.btn-success { background: linear-gradient(135deg, #27ae60, #229954); }
+.btn-success:hover { background: linear-gradient(135deg, #229954, #1e8449); }
+.online { color: #27ae60; font-weight: 600; }
+.offline { color: #e74c3c; font-weight: 600; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
+.image-card { 
+  border: 1px solid rgba(236, 240, 241, 0.8); 
+  border-radius: 15px; 
+  padding: 15px; 
+  background: rgba(255, 255, 255, 0.8); 
+  transition: all 0.3s ease;
+}
+.image-card:hover { 
+  transform: translateY(-2px); 
+  box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+}
+.image-card img { 
+  width: 100%; 
+  height: auto; 
+  border-radius: 12px; 
+  cursor: pointer; 
+  transition: transform 0.3s ease;
+}
+.image-card img:hover { transform: scale(1.02); }
+.image-meta { font-size: 13px; color: #7f8c8d; margin-top: 10px; }
+input, select { 
+  padding: 12px 16px; 
+  border: 2px solid rgba(236, 240, 241, 0.8); 
+  border-radius: 12px; 
+  font-size: 14px; 
+  background: rgba(255, 255, 255, 0.9);
+  transition: all 0.3s ease;
+  width: 100%;
+}
+input:focus, select:focus { 
+  outline: none; 
+  border-color: #3498db; 
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+.config-item { 
+  background: rgba(248, 249, 250, 0.8); 
+  padding: 20px; 
+  border-radius: 15px; 
+  margin-bottom: 20px; 
+  border: 1px solid rgba(236, 240, 241, 0.5);
+}
+.config-item label { 
+  display: block; 
+  font-weight: 600; 
+  margin-bottom: 8px; 
+  color: #2c3e50; 
+  font-size: 14px;
+}
+.config-item input[type="text"] { width: 100%; margin-bottom: 15px; }
+
+/* Toggle Switch Styles */
+.toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+.toggle-switch {
+  position: relative;
+  width: 50px;
+  height: 26px;
+  background: #bdc3c7;
+  border-radius: 13px;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+.toggle-switch.active {
+  background: #27ae60;
+}
+.toggle-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.toggle-switch.active::before {
+  transform: translateX(24px);
+}
+.toggle-label {
+  font-weight: 500;
+  color: #2c3e50;
+  cursor: pointer;
+}
+
+.trigger-indicator { 
+  background: rgba(248, 249, 250, 0.8); 
+  padding: 20px; 
+  border-radius: 15px; 
+  margin-bottom: 15px; 
+  display: flex; 
+  align-items: center; 
+  gap: 20px;
+  border: 1px solid rgba(236, 240, 241, 0.5);
+}
+.trigger-light { 
+  width: 35px; 
+  height: 35px; 
+  border-radius: 50%; 
+  background: #bdc3c7; 
+  transition: all 0.3s ease;
+  position: relative;
+}
+.trigger-light.active { 
+  background: #27ae60; 
+  box-shadow: 0 0 20px rgba(39, 174, 96, 0.5); 
+  animation: pulse 1s infinite;
+}
+@keyframes pulse { 
+  0%, 100% { transform: scale(1); } 
+  50% { transform: scale(1.1); } 
+}
+.pagination { 
+  display: flex; 
+  gap: 8px; 
+  justify-content: center; 
+  margin-top: 25px; 
+  flex-wrap: wrap;
+}
+.pagination button { 
+  padding: 10px 16px; 
+  border-radius: 10px;
+  min-width: 40px;
+}
+
+/* Loading states */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .container { padding: 15px; }
+  .header { flex-direction: column; gap: 15px; text-align: center; }
+  .tabs { flex-direction: column; }
+  .grid { grid-template-columns: 1fr; }
+  .image-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📷 CamCap Dashboard</h1>
+    <div>
+      <button class="btn" onclick="manualSnap()">📸 Manual Snap</button>
+      <a href="/logout" class="btn btn-danger">🚪 Logout</a>
+    </div>
+  </div>
+  
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('dashboard')">📊 Dashboard</button>
+    <button class="tab-btn" onclick="showTab('config')">⚙️ Configuration</button>
+    <button class="tab-btn" onclick="showTab('storage')">💾 Storage</button>
+    <button class="tab-btn" onclick="showTab('images')">🖼️ Images</button>
+  </div>
+
+  <!-- Dashboard Tab -->
+  <div id="dashboard" class="tab-content active">
+    <div class="grid">
+      <div class="card">
+        <h3>📊 System Status</h3>
+        <div class="stat-row">
+          <span class="stat-label">Upload Status:</span>
+          <span class="stat-value" id="upload-status">Loading...</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Uploaded:</span>
+          <span class="stat-value" id="uploaded-count">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Pending:</span>
+          <span class="stat-value" id="pending-count">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Total Images:</span>
+          <span class="stat-value" id="total-images">0</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>📷 Camera Health</h3>
+        <div class="stat-row">
+          <span class="stat-label">Entry Camera:</span>
+          <span class="stat-value" id="cam1-status">Loading...</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Exit Camera:</span>
+          <span class="stat-value" id="cam2-status">Loading...</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">System Temp:</span>
+          <span class="stat-value" id="system-temp">Loading...</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>🔘 GPIO Triggers</h3>
+        <div class="trigger-indicator">
+          <div class="trigger-light" id="trigger-r1"></div>
+          <span>Entry (R1) - Pin 18</span>
+        </div>
+        <div class="trigger-indicator">
+          <div class="trigger-light" id="trigger-r2"></div>
+          <span>Exit (R2) - Pin 19</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="card" style="margin-top: 25px;">
+      <h3>📸 Recent Images</h3>
+      <div class="image-grid" id="recent-images">
+        <div style="text-align: center; padding: 40px; color: #7f8c8d;">Loading recent images...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Configuration Tab -->
+  <div id="config" class="tab-content">
+    <div class="card">
+      <h3>📷 Camera Configuration</h3>
+      <div class="config-item">
+        <label>Entry Camera (R1) RTSP URL:</label>
+        <input type="text" id="cam1-rtsp" placeholder="rtsp://username:password@ip:port/path">
+        <div class="toggle-container">
+          <div class="toggle-switch" id="cam1-toggle" onclick="toggleSwitch('cam1-toggle')"></div>
+          <span class="toggle-label">Enable Entry Camera</span>
+        </div>
+      </div>
+      <div class="config-item">
+        <label>Exit Camera (R2) RTSP URL:</label>
+        <input type="text" id="cam2-rtsp" placeholder="rtsp://username:password@ip:port/path">
+        <div class="toggle-container">
+          <div class="toggle-switch" id="cam2-toggle" onclick="toggleSwitch('cam2-toggle')"></div>
+          <span class="toggle-label">Enable Exit Camera</span>
+        </div>
+      </div>
+      <button class="btn btn-success" onclick="saveCameraConfig()">💾 Save Camera Settings</button>
+    </div>
+    
+    <div class="card">
+      <h3>☁️ Upload Configuration</h3>
+      <div class="config-item">
+        <label>Upload Endpoint:</label>
+        <input type="text" id="upload-endpoint" placeholder="https://api.example.com/upload">
+      </div>
+      <div class="config-item">
+        <label>Auth Bearer Token:</label>
+        <input type="text" id="upload-auth" placeholder="Optional bearer token">
+      </div>
+      <div class="toggle-container">
+        <div class="toggle-switch" id="upload-toggle" onclick="toggleSwitch('upload-toggle')"></div>
+        <span class="toggle-label">Enable Upload</span>
+      </div>
+      <button class="btn btn-success" onclick="saveUploadConfig()">💾 Save Upload Settings</button>
+    </div>
+  </div>
+
+  <!-- Storage Tab -->
+  <div id="storage" class="tab-content">
+    <div class="card">
+      <h3>💾 Storage Analysis</h3>
+      <div class="stat-row">
+        <span class="stat-label">Total Images:</span>
+        <span class="stat-value" id="storage-total">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Entry (R1):</span>
+        <span class="stat-value" id="storage-r1">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Exit (R2):</span>
+        <span class="stat-value" id="storage-r2">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Uploaded:</span>
+        <span class="stat-value" id="storage-uploaded">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Pending:</span>
+        <span class="stat-value" id="storage-pending">0</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Images Tab -->
+  <div id="images" class="tab-content">
+    <div class="card">
+      <h3>🖼️ Image Gallery</h3>
+      <div style="margin-bottom: 20px; display: flex; gap: 15px; flex-wrap: wrap;">
+        <select id="date-filter" onchange="loadImagesByDate()" style="flex: 1; min-width: 200px;">
+          <option value="">Select Date</option>
+        </select>
+        <select id="source-filter" onchange="loadImagesByDate()" style="flex: 1; min-width: 150px;">
+          <option value="">All Sources</option>
+          <option value="r1">Entry (R1)</option>
+          <option value="r2">Exit (R2)</option>
+        </select>
+      </div>
+      <div class="image-grid" id="images-grid">
+        <div style="text-align: center; padding: 40px; color: #7f8c8d;">Select a date to view images</div>
+      </div>
+      <div class="pagination" id="images-pagination"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentTab = 'dashboard';
+let currentPage = 1;
+let currentDate = '';
+let currentSource = '';
+
+function showTab(tabName) {
+  // Hide all tabs
+  document.querySelectorAll('.tab-content').forEach(tab => {
+    tab.classList.remove('active');
+  });
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  
+  // Show selected tab
+  document.getElementById(tabName).classList.add('active');
+  event.target.classList.add('active');
+  currentTab = tabName;
+  
+  // Load tab-specific data
+  if (tabName === 'storage') {
+    loadStorageStats();
+  } else if (tabName === 'images') {
+    loadDateList();
+  } else if (tabName === 'config') {
+    loadConfig();
+  }
+}
+
+function toggleSwitch(toggleId) {
+  const toggle = document.getElementById(toggleId);
+  toggle.classList.toggle('active');
+}
+
+function manualSnap() {
+  fetch('/snap', {method: 'POST'})
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        alert('Image captured successfully!');
+        loadRecentImages();
+      } else {
+        alert('Failed to capture image: ' + data.error);
+      }
+    });
+}
+
+function loadStatus() {
+  fetch('/api/status')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('upload-status').textContent = data.upload.enabled ? '🟢 ONLINE' : '🔴 OFFLINE';
+      document.getElementById('uploaded-count').textContent = data.upload.uploaded || 0;
+      document.getElementById('pending-count').textContent = data.upload.pending_count || 0;
+      document.getElementById('total-images').textContent = data.storage.total || 0;
+      
+      // Update GPIO triggers
+      if (data.gpio_triggers && data.gpio_triggers.r1) {
+        document.getElementById('trigger-r1').classList.add('active');
+        setTimeout(() => document.getElementById('trigger-r1').classList.remove('active'), 2000);
+      }
+      if (data.gpio_triggers && data.gpio_triggers.r2) {
+        document.getElementById('trigger-r2').classList.add('active');
+        setTimeout(() => document.getElementById('trigger-r2').classList.remove('active'), 2000);
+      }
+    });
+}
+
+function loadHealth() {
+  fetch('/api/health')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('cam1-status').textContent = data.cameras.cam1.online ? '🟢 ONLINE' : '🔴 OFFLINE';
+      document.getElementById('cam2-status').textContent = data.cameras.cam2.online ? '🟢 ONLINE' : '🔴 OFFLINE';
+      document.getElementById('system-temp').textContent = data.system.temperature + '°C';
+    });
+}
+
+function loadRecentImages() {
+  fetch('/api/images/recent?per_page=12')
+    .then(response => response.json())
+    .then(data => {
+      const container = document.getElementById('recent-images');
+      if (data.images && data.images.length > 0) {
+        container.innerHTML = data.images.map(img => `
+          <div class="image-card">
+            <img src="/images/${img.filename}" alt="${img.filename}" onclick="openImageModal('/images/${img.filename}')">
+            <div class="image-meta">
+              <div><strong>${img.source.toUpperCase()}</strong></div>
+              <div>${new Date(img.timestamp * 1000).toLocaleString()}</div>
+              <div>${img.size} bytes</div>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #7f8c8d;">No recent images</div>';
+      }
+    });
+}
+
+function loadStorageStats() {
+  fetch('/api/storage/stats')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('storage-total').textContent = data.total || 0;
+      document.getElementById('storage-r1').textContent = data.by_source.r1 || 0;
+      document.getElementById('storage-r2').textContent = data.by_source.r2 || 0;
+      document.getElementById('storage-uploaded').textContent = data.uploaded || 0;
+      document.getElementById('storage-pending').textContent = data.pending || 0;
+    });
+}
+
+function loadDateList() {
+  fetch('/api/images/dates')
+    .then(response => response.json())
+    .then(data => {
+      const select = document.getElementById('date-filter');
+      select.innerHTML = '<option value="">Select Date</option>';
+      data.dates.forEach(date => {
+        const option = document.createElement('option');
+        option.value = date;
+        option.textContent = date;
+        select.appendChild(option);
+      });
+    });
+}
+
+function loadConfig() {
+  fetch('/api/config')
+    .then(response => response.json())
+    .then(data => {
+      document.getElementById('cam1-rtsp').value = data.cameras.cam1_rtsp || '';
+      document.getElementById('cam2-rtsp').value = data.cameras.cam2_rtsp || '';
+      document.getElementById('cam1-toggle').classList.toggle('active', data.cameras.cam1_enabled);
+      document.getElementById('cam2-toggle').classList.toggle('active', data.cameras.cam2_enabled);
+      document.getElementById('upload-endpoint').value = data.upload.endpoint || '';
+      document.getElementById('upload-auth').value = data.upload.auth_bearer || '';
+      document.getElementById('upload-toggle').classList.toggle('active', data.upload.enabled);
+    });
+}
+
+function loadImagesByDate() {
+  const date = document.getElementById('date-filter').value;
+  const source = document.getElementById('source-filter').value;
+  
+  if (!date) {
+    document.getElementById('images-grid').innerHTML = '<div style="text-align: center; padding: 40px; color: #7f8c8d;">Select a date to view images</div>';
+    return;
+  }
+  
+  currentDate = date;
+  currentSource = source;
+  currentPage = 1;
+  loadImagesPage();
+}
+
+function loadImagesPage() {
+  if (!currentDate) return;
+  
+  const url = `/api/images/by-date?date=${currentDate}&page=${currentPage}&per_page=20${currentSource ? '&source=' + currentSource : ''}`;
+  
+  fetch(url)
+    .then(response => response.json())
+    .then(data => {
+      const container = document.getElementById('images-grid');
+      if (data.images && data.images.length > 0) {
+        container.innerHTML = data.images.map(img => `
+          <div class="image-card">
+            <img src="/images/${img.filename}" alt="${img.filename}" onclick="openImageModal('/images/${img.filename}')">
+            <div class="image-meta">
+              <div><strong>${img.source.toUpperCase()}</strong></div>
+              <div>${new Date(img.timestamp * 1000).toLocaleString()}</div>
+              <div>${img.size} bytes</div>
+            </div>
+          </div>
+        `).join('');
+        
+        // Update pagination
+        const totalPages = Math.ceil(data.total / 20);
+        const pagination = document.getElementById('images-pagination');
+        pagination.innerHTML = '';
+        
+        for (let i = 1; i <= totalPages; i++) {
+          const btn = document.createElement('button');
+          btn.textContent = i;
+          btn.className = i === currentPage ? 'btn btn-success' : 'btn';
+          btn.onclick = () => {
+            currentPage = i;
+            loadImagesPage();
+          };
+          pagination.appendChild(btn);
+        }
+      } else {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #7f8c8d;">No images found for this date</div>';
+        document.getElementById('images-pagination').innerHTML = '';
+      }
+    });
+}
+
+function openImageModal(imageSrc) {
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+    background: rgba(0,0,0,0.8); display: flex; justify-content: center; 
+    align-items: center; z-index: 1000;
+  `;
+  modal.innerHTML = `
+    <div style="max-width: 90%; max-height: 90%;">
+      <img src="${imageSrc}" style="max-width: 100%; max-height: 100%; border-radius: 15px;">
+    </div>
+  `;
+  modal.onclick = () => document.body.removeChild(modal);
+  document.body.appendChild(modal);
+}
+
+function saveCameraConfig() {
+  const data = {
+    cameras: {
+      cam1_rtsp: document.getElementById('cam1-rtsp').value,
+      cam2_rtsp: document.getElementById('cam2-rtsp').value,
+      cam1_enabled: document.getElementById('cam1-toggle').classList.contains('active'),
+      cam2_enabled: document.getElementById('cam2-toggle').classList.contains('active')
+    }
+  };
+  
+  fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      alert('Camera configuration saved successfully!');
+    } else {
+      alert('Failed to save configuration: ' + data.error);
+    }
+  });
+}
+
+function saveUploadConfig() {
+  const data = {
+    upload: {
+      endpoint: document.getElementById('upload-endpoint').value,
+      auth_bearer: document.getElementById('upload-auth').value,
+      enabled: document.getElementById('upload-toggle').classList.contains('active')
+    }
+  };
+  
+  fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      alert('Upload configuration saved successfully!');
+    } else {
+      alert('Failed to save configuration: ' + data.error);
+    }
+  });
+}
+
+// Load initial data
+loadStatus();
+loadHealth();
+loadRecentImages();
+
+// Auto-refresh every 5 seconds
+setInterval(() => {
+  if (currentTab === 'dashboard') {
+    loadStatus();
+    loadHealth();
+  }
+}, 5000);
+</script>
+</body>
+</html>
