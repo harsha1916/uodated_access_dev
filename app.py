@@ -110,6 +110,7 @@ def get_rtsp_url(source: str) -> str:
 # Capture function (runs in background thread)
 def snap(source: str, rtsp_url: str):
     """Capture image from RTSP camera."""
+    print(f"[SNAP] 🚀 Starting capture for {source}...")
     ts = epoch_now()
     out_path = filename_for(source, ts)
     
@@ -117,13 +118,24 @@ def snap(source: str, rtsp_url: str):
         print(f"[SNAP] {source} is disabled, skipping")
         return
     
-    print(f"[SNAP] Capturing {source}...")
-    ok = grab_jpeg(rtsp_url, out_path)
-    if ok:
-        add_image(out_path, source, ts)
-        print(f"[SNAP] ✓ {source} -> {out_path}")
-    else:
-        print(f"[SNAP] ✗ {source} failed")
+    print(f"[SNAP] 📸 Capturing {source} from {rtsp_url}...")
+    start_time = time.time()
+    
+    try:
+        ok = grab_jpeg(rtsp_url, out_path)
+        capture_time = time.time() - start_time
+        print(f"[SNAP] ⏱️ Capture took {capture_time:.2f}s")
+        
+        if ok:
+            print(f"[SNAP] 💾 Adding to database...")
+            add_image(out_path, source, ts)
+            print(f"[SNAP] ✅ {source} -> {out_path}")
+        else:
+            print(f"[SNAP] ❌ {source} failed")
+    except Exception as e:
+        print(f"[SNAP] 💥 Error capturing {source}: {e}")
+    
+    print(f"[SNAP] 🏁 Finished {source} capture")
 
 def snap_async(source: str, rtsp_url: str):
     """Capture image in background thread (non-blocking)."""
@@ -137,54 +149,65 @@ def snap_async(source: str, rtsp_url: str):
 
 # GPIO Button callbacks (return immediately!)
 def btn1_pressed():
+    """Handle button 1 press - completely non-blocking."""
     current_time = time.time()
     
+    # Quick debounce check with minimal lock time
     with gpio_trigger_lock:
-        # Check debounce - ignore if triggered too recently
         if current_time - last_trigger_time['r1'] < MIN_TRIGGER_INTERVAL:
             print(f"[GPIO] ⚠ r1 trigger ignored (debounce protection)")
             return
-        
-        # Update trigger time and count
         last_trigger_time['r1'] = current_time
         gpio_triggers['r1'] += 1
     
+    # Print immediately - don't block on this
     print(f"[GPIO] 🔔 BUTTON 1 PRESSED - Triggering r1 capture...")
     
-    rtsp = get_rtsp_url("r1")
-    if rtsp and is_camera_enabled("r1"):
-        snap_async("r1", rtsp)  # Non-blocking!
-    else:
-        print(f"[GPIO] ⚠ r1 disabled or no RTSP URL")
+    # Start capture in separate thread immediately
+    def _handle_capture():
+        rtsp = get_rtsp_url("r1")
+        if rtsp and is_camera_enabled("r1"):
+            snap_async("r1", rtsp)
+        else:
+            print(f"[GPIO] ⚠ r1 disabled or no RTSP URL")
+    
+    # Run capture check in separate thread to avoid any blocking
+    threading.Thread(target=_handle_capture, daemon=True, name="Btn1-Handler").start()
 
 def btn2_pressed():
+    """Handle button 2 press - completely non-blocking."""
     current_time = time.time()
     
+    # Quick debounce check with minimal lock time
     with gpio_trigger_lock:
-        # Check debounce - ignore if triggered too recently
         if current_time - last_trigger_time['r2'] < MIN_TRIGGER_INTERVAL:
             print(f"[GPIO] ⚠ r2 trigger ignored (debounce protection)")
             return
-        
-        # Update trigger time and count
         last_trigger_time['r2'] = current_time
         gpio_triggers['r2'] += 1
     
+    # Print immediately - don't block on this
     print(f"[GPIO] 🔔 BUTTON 2 PRESSED - Triggering r2 capture...")
     
-    rtsp = get_rtsp_url("r2")
-    if rtsp and is_camera_enabled("r2"):
-        snap_async("r2", rtsp)  # Non-blocking!
-    else:
-        print(f"[GPIO] ⚠ r2 disabled or no RTSP URL")
+    # Start capture in separate thread immediately
+    def _handle_capture():
+        rtsp = get_rtsp_url("r2")
+        if rtsp and is_camera_enabled("r2"):
+            snap_async("r2", rtsp)
+        else:
+            print(f"[GPIO] ⚠ r2 disabled or no RTSP URL")
+    
+    # Run capture check in separate thread to avoid any blocking
+    threading.Thread(target=_handle_capture, daemon=True, name="Btn2-Handler").start()
 
 # Setup GPIO buttons
 try:
-    btn1 = Button(BTN1_GPIO, pull_up=True, bounce_time=0.3)
-    btn2 = Button(BTN2_GPIO, pull_up=True, bounce_time=0.3)
+    btn1 = Button(BTN1_GPIO, pull_up=True, bounce_time=0.1)  # Reduced bounce time
+    btn2 = Button(BTN2_GPIO, pull_up=True, bounce_time=0.1)  # Reduced bounce time
     btn1.when_pressed = btn1_pressed
     btn2.when_pressed = btn2_pressed
     print(f"[GPIO] ✓ Buttons configured: GPIO {BTN1_GPIO} (r1), GPIO {BTN2_GPIO} (r2)")
+    print(f"[GPIO] ✓ Bounce time: 0.1s, Debounce interval: {MIN_TRIGGER_INTERVAL}s")
 except Exception as e:
     print(f"[GPIO] ⚠ Failed to initialize buttons: {e}")
     btn1 = btn2 = None
