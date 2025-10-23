@@ -75,3 +75,82 @@ def delete_older_than(epoch_threshold: int):
             except Exception:
                 pass
         c.execute("DELETE FROM images WHERE created_at < ?", (epoch_threshold,))
+
+def get_storage_stats():
+    """Get storage statistics."""
+    with get_conn() as c:
+        # Total images
+        total = c.execute("SELECT COUNT(*) as cnt FROM images").fetchone()['cnt']
+        
+        # By source
+        by_source = {}
+        cur = c.execute("SELECT source, COUNT(*) as cnt FROM images GROUP BY source")
+        for row in cur.fetchall():
+            by_source[row['source']] = row['cnt']
+        
+        # Uploaded vs pending
+        uploaded = c.execute("SELECT COUNT(*) as cnt FROM images WHERE uploaded=1").fetchone()['cnt']
+        pending = c.execute("SELECT COUNT(*) as cnt FROM images WHERE uploaded=0").fetchone()['cnt']
+        
+        return {
+            'total': total,
+            'by_source': by_source,
+            'uploaded': uploaded,
+            'pending': pending
+        }
+
+def get_images_by_date(date_str: str, source_filter: str = None, limit: int = 50, offset: int = 0):
+    """Get images for a specific date (YYYY-MM-DD format)."""
+    from datetime import datetime
+    
+    # Convert date string to epoch range
+    try:
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        start_epoch = int(date_obj.timestamp())
+        end_epoch = start_epoch + 86400  # +24 hours
+    except:
+        return []
+    
+    with get_conn() as c:
+        if source_filter:
+            cur = c.execute(
+                "SELECT * FROM images WHERE epoch >= ? AND epoch < ? AND source = ? ORDER BY epoch DESC LIMIT ? OFFSET ?",
+                (start_epoch, end_epoch, source_filter, limit, offset)
+            )
+        else:
+            cur = c.execute(
+                "SELECT * FROM images WHERE epoch >= ? AND epoch < ? ORDER BY epoch DESC LIMIT ? OFFSET ?",
+                (start_epoch, end_epoch, limit, offset)
+            )
+        return [dict(r) for r in cur.fetchall()]
+
+def get_images_by_date_count(date_str: str, source_filter: str = None):
+    """Get count of images for a specific date."""
+    from datetime import datetime
+    
+    try:
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        start_epoch = int(date_obj.timestamp())
+        end_epoch = start_epoch + 86400
+    except:
+        return 0
+    
+    with get_conn() as c:
+        if source_filter:
+            cnt = c.execute(
+                "SELECT COUNT(*) as cnt FROM images WHERE epoch >= ? AND epoch < ? AND source = ?",
+                (start_epoch, end_epoch, source_filter)
+            ).fetchone()['cnt']
+        else:
+            cnt = c.execute(
+                "SELECT COUNT(*) as cnt FROM images WHERE epoch >= ? AND epoch < ?",
+                (start_epoch, end_epoch)
+            ).fetchone()['cnt']
+        return cnt
+
+def get_date_list():
+    """Get list of dates that have images."""
+    from datetime import datetime
+    with get_conn() as c:
+        cur = c.execute("SELECT DISTINCT DATE(epoch, 'unixepoch', 'localtime') as date FROM images ORDER BY date DESC LIMIT 90")
+        return [row['date'] for row in cur.fetchall()]

@@ -1,7 +1,8 @@
 import os
 import time
 import requests
-from typing import Optional, Callable
+import threading
+from typing import Optional, Callable, Dict
 from storage import get_pending_batch, mark_uploaded, mark_failed
 
 class Uploader:
@@ -32,6 +33,20 @@ class Uploader:
         self.sleep_fail = sleep_fail
         self.timeout = timeout
         self._stop = False
+        
+        # Offline mode tracking
+        self._lock = threading.Lock()
+        self.is_online = True
+        self.last_connectivity_check = 0
+        self.connectivity_check_interval = int(os.getenv('CONNECTIVITY_CHECK_INTERVAL', '60'))
+        
+        # Statistics
+        self.stats = {
+            'total_uploaded': 0,
+            'total_failed': 0,
+            'offline_mode': False,
+            'last_check': None
+        }
 
     def stop(self):
         self._stop = True
@@ -51,12 +66,62 @@ class Uploader:
         with open(filepath, "rb") as f:
             data = f.read()
         return requests.put(url, data=data, headers={"Content-Type": "image/jpeg", **self._headers()}, timeout=self.timeout)
+    
+    def check_internet_connectivity(self) -> bool:
+        """Check if internet connection is available."""
+        current_time = time.time()
+        
+        # Only check if enough time has passed
+        if current_time - self.last_connectivity_check < self.connectivity_check_interval:
+            return self.is_online
+        
+        self.last_connectivity_check = current_time
+        
+        try:
+            # Try to reach a reliable endpoint
+            response = requests.get('https://www.google.com', timeout=5)
+            self.is_online = response.status_code == 200
+            
+            with self._lock:
+                if self.is_online and self.stats['offline_mode']:
+                    print("[UPLOADER] ✓ Internet connection restored - switching to online mode")
+                    self.stats['offline_mode'] = False
+                elif not self.is_online and not self.stats['offline_mode']:
+                    print("[UPLOADER] ⚠ Internet connection lost - switching to offline mode")
+                    self.stats['offline_mode'] = True
+                self.stats['last_check'] = current_time
+                    
+        except Exception:
+            self.is_online = False
+            with self._lock:
+                if not self.stats['offline_mode']:
+                    print("[UPLOADER] ⚠ Internet connection lost - switching to offline mode")
+                    self.stats['offline_mode'] = True
+                self.stats['last_check'] = current_time
+        
+        return self.is_online
+    
+    def get_stats(self) -> Dict:
+        """Get uploader statistics."""
+        with self._lock:
+            return self.stats.copy()
 
     def run_forever(self):
+        print("[UPLOADER] Background upload thread started")
+        
         while not self._stop:
+            # Check internet connectivity
+            is_online = self.check_internet_connectivity()
+            
             items = get_pending_batch(self.batch_size)
             if not items:
                 time.sleep(self.sleep_ok)
+                continue
+            
+            # Skip upload if offline
+            if not is_online:
+                print(f"[UPLOADER] Offline - {len(items)} images pending, will retry when online")
+                time.sleep(self.sleep_fail)
                 continue
 
             had_error = False
@@ -74,9 +139,14 @@ class Uploader:
                         resp = self._upload_post(fp)
                         if 200 <= resp.status_code < 300:
                             mark_uploaded(fid)
+                            with self._lock:
+                                self.stats['total_uploaded'] += 1
+                            print(f"[UPLOADER] ✓ Uploaded: {os.path.basename(fp)}")
                         else:
                             had_error = True
                             mark_failed(fid, f"HTTP {resp.status_code}: {resp.text[:200]}")
+                            with self._lock:
+                                self.stats['total_failed'] += 1
                     elif self.mode == "PUT":
                         if self.presigner is None:
                             raise RuntimeError("PUT mode requires presigner(filename) -> presigned_url")
@@ -84,22 +154,35 @@ class Uploader:
                         if not presigned_url:
                             had_error = True
                             mark_failed(fid, "presigner returned no URL")
+                            with self._lock:
+                                self.stats['total_failed'] += 1
                             continue
                         resp = self._upload_put(presigned_url, fp)
                         if 200 <= resp.status_code < 300:
                             mark_uploaded(fid)
+                            with self._lock:
+                                self.stats['total_uploaded'] += 1
+                            print(f"[UPLOADER] ✓ Uploaded: {os.path.basename(fp)}")
                         else:
                             had_error = True
                             mark_failed(fid, f"PUT {resp.status_code}: {resp.text[:200]}")
+                            with self._lock:
+                                self.stats['total_failed'] += 1
                     else:
                         had_error = True
                         mark_failed(fid, f"Unknown mode {self.mode}")
+                        with self._lock:
+                            self.stats['total_failed'] += 1
 
                 except requests.RequestException as re:
                     had_error = True
                     mark_failed(fid, f"net:{type(re).__name__}:{str(re)[:160]}")
+                    with self._lock:
+                        self.stats['total_failed'] += 1
                 except Exception as e:
                     had_error = True
                     mark_failed(fid, f"err:{type(e).__name__}:{str(e)[:160]}")
+                    with self._lock:
+                        self.stats['total_failed'] += 1
 
             time.sleep(self.sleep_fail if had_error else self.sleep_ok)
