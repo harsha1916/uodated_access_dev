@@ -112,20 +112,33 @@ class Uploader:
             print(f"[UPLOADER] File too large: {filepath} ({file_size} bytes)")
             return False
         
+        filename = os.path.basename(filepath)
+        print(f"[UPLOADER] Uploading {filename} ({file_size} bytes)...")
+        
         # Retry logic (like uploader1.py)
         attempts = 0
         while attempts < self.max_retries:
             try:
                 with open(filepath, "rb") as image_file:
+                    # Use exact pattern from uploader1.py
                     files = {
-                        self.field_name: (os.path.basename(filepath), image_file, "image/jpeg")
+                        self.field_name: (filename, image_file, "image/jpeg")
                     }
+                    
+                    # Debug: Show request details
+                    print(f"[UPLOADER] Attempt {attempts + 1}/{self.max_retries}")
+                    print(f"[UPLOADER] → Endpoint: {self.endpoint}")
+                    print(f"[UPLOADER] → Field name: {self.field_name}")
+                    print(f"[UPLOADER] → Filename: {filename}")
+                    
                     response = requests.post(
                         self.endpoint,
                         files=files,
                         headers=self._headers(),
                         timeout=self.timeout
                     )
+                    
+                    print(f"[UPLOADER] ← Response: HTTP {response.status_code}")
                 
                 # Check response
                 if response.status_code == 200:
@@ -133,27 +146,28 @@ class Uploader:
                         response_json = response.json()
                         location = response_json.get("Location")
                         if location:
-                            print(f"[UPLOADER] ✓ Uploaded: {os.path.basename(filepath)}")
+                            print(f"[UPLOADER] ✓ Success! Location: {location}")
                             return True
                         else:
-                            print(f"[UPLOADER] ⚠ No Location in response")
+                            print(f"[UPLOADER] ✓ Success (no Location in response)")
+                            return True
                     except ValueError:
-                        print(f"[UPLOADER] ⚠ Invalid JSON response")
-                    
-                    # Even without Location, 200 = success
-                    if response.status_code == 200:
+                        # Not JSON, but 200 = success
+                        print(f"[UPLOADER] ✓ Success (non-JSON response)")
                         return True
                 else:
+                    # Show error details for debugging
                     print(f"[UPLOADER] ✗ Upload failed: HTTP {response.status_code}")
+                    print(f"[UPLOADER] ✗ Response: {response.text[:500]}")
                 
             except requests.exceptions.Timeout:
-                print(f"[UPLOADER] ⚠ Upload timeout for {os.path.basename(filepath)}")
-            except requests.exceptions.ConnectionError:
-                print(f"[UPLOADER] ⚠ Connection error for {os.path.basename(filepath)}")
+                print(f"[UPLOADER] ⚠ Upload timeout after {self.timeout}s")
+            except requests.exceptions.ConnectionError as e:
+                print(f"[UPLOADER] ⚠ Connection error: {str(e)[:200]}")
             except requests.exceptions.RequestException as e:
-                print(f"[UPLOADER] ✗ Upload error: {type(e).__name__}")
+                print(f"[UPLOADER] ✗ Request error: {type(e).__name__}: {str(e)[:200]}")
             except Exception as e:
-                print(f"[UPLOADER] ✗ Unexpected error: {type(e).__name__}: {str(e)[:100]}")
+                print(f"[UPLOADER] ✗ Unexpected error: {type(e).__name__}: {str(e)[:200]}")
             
             # Retry logic
             attempts += 1
@@ -162,7 +176,7 @@ class Uploader:
                 time.sleep(self.retry_delay)
         
         # All retries failed
-        print(f"[UPLOADER] ✗ Giving up on {os.path.basename(filepath)} after {self.max_retries} attempts")
+        print(f"[UPLOADER] ✗ Giving up on {filename} after {self.max_retries} attempts")
         return False
 
     def get_stats(self) -> Dict:
