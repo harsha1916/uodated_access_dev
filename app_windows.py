@@ -7,8 +7,22 @@ from datetime import datetime
 from functools import wraps
 from dotenv import load_dotenv, set_key
 from flask import Flask, render_template_string, send_from_directory, request, redirect, url_for, session, jsonify, flash
-from gpiozero import Button
-from rtsp_capture import grab_jpeg
+
+# Try to import GPIO modules, but don't fail if they're not available (Windows compatibility)
+try:
+    from gpiozero import Button
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
+    print("[WARNING] GPIO modules not available (Windows/Non-Raspberry Pi)")
+
+try:
+    from rtsp_capture import grab_jpeg
+    RTSP_AVAILABLE = True
+except ImportError:
+    RTSP_AVAILABLE = False
+    print("[WARNING] RTSP capture not available")
+
 from storage import (init_db, add_image, list_recent, delete_older_than, 
                      get_storage_stats, get_images_by_date, get_images_by_date_count, get_date_list, get_pending_batch)
 from uploader import Uploader
@@ -45,7 +59,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "change-this-secret-key")
 UPLOAD_MODE = os.getenv("UPLOAD_MODE", "POST").upper()
 UPLOAD_ENDPOINT = os.getenv("UPLOAD_ENDPOINT", "")
 UPLOAD_AUTH_BEARER = os.getenv("UPLOAD_AUTH_BEARER", "")
-UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "file")
+UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "singleFile")
 UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() == "true"
 
 # Offline mode settings
@@ -106,6 +120,10 @@ def get_rtsp_url(source: str) -> str:
 def snap(source: str) -> bool:
     """Capture image from RTSP camera."""
     try:
+        if not RTSP_AVAILABLE:
+            print(f"[SNAP] RTSP capture not available (Windows mode)")
+            return False
+            
         rtsp_url = get_rtsp_url(source)
         if not rtsp_url:
             print(f"[SNAP] No RTSP URL configured for {source}")
@@ -149,20 +167,23 @@ def on_button_press(source: str):
     gpio_triggers[source] = True
     snap_async(source)  # Non-blocking capture
 
-# Initialize GPIO buttons
-try:
-    if CAM1_ENABLED:
-        btn1 = Button(BTN1_GPIO, pull_up=True)
-        btn1.when_pressed = lambda: on_button_press("r1")
-        print(f"[GPIO] Button 1 (R1) configured on pin {BTN1_GPIO}")
-    
-    if CAM2_ENABLED:
-        btn2 = Button(BTN2_GPIO, pull_up=True)
-        btn2.when_pressed = lambda: on_button_press("r2")
-        print(f"[GPIO] Button 2 (R2) configured on pin {BTN2_GPIO}")
+# Initialize GPIO buttons (only if GPIO is available)
+if GPIO_AVAILABLE:
+    try:
+        if CAM1_ENABLED:
+            btn1 = Button(BTN1_GPIO, pull_up=True)
+            btn1.when_pressed = lambda: on_button_press("r1")
+            print(f"[GPIO] Button 1 (R1) configured on pin {BTN1_GPIO}")
         
-except Exception as e:
-    print(f"[GPIO] Error initializing buttons: {e}")
+        if CAM2_ENABLED:
+            btn2 = Button(BTN2_GPIO, pull_up=True)
+            btn2.when_pressed = lambda: on_button_press("r2")
+            print(f"[GPIO] Button 2 (R2) configured on pin {BTN2_GPIO}")
+            
+    except Exception as e:
+        print(f"[GPIO] Error initializing buttons: {e}")
+else:
+    print("[GPIO] GPIO not available - running in Windows/Desktop mode")
 
 # Routes
 @app.route('/login', methods=['GET', 'POST'])
@@ -409,7 +430,7 @@ button:hover { background: #5568d3; }
 </body>
 </html>"""
 
-# Modern Dashboard Template
+# Modern Dashboard Template (same as app_modern.py)
 DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1175,5 +1196,7 @@ if __name__ == "__main__":
     print(f"[WEB] Starting Flask server on {FLASK_HOST}:{FLASK_PORT}")
     print(f"[WEB] Dashboard: http://{FLASK_HOST}:{FLASK_PORT}")
     print(f"[WEB] Authentication: {'Enabled' if WEB_AUTH_ENABLED else 'Disabled'}")
+    print(f"[WEB] GPIO Available: {'Yes' if GPIO_AVAILABLE else 'No (Windows mode)'}")
+    print(f"[WEB] RTSP Available: {'Yes' if RTSP_AVAILABLE else 'No (Windows mode)'}")
     
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG, threaded=True)

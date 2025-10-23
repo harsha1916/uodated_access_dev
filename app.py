@@ -60,6 +60,8 @@ health_monitor = HealthMonitor()
 uploader = None
 gpio_triggers = {'r1': 0, 'r2': 0}
 gpio_trigger_lock = threading.Lock()
+last_trigger_time = {'r1': 0, 'r2': 0}
+MIN_TRIGGER_INTERVAL = 1.0  # Minimum 1 second between triggers
 
 # Authentication decorator
 def login_required(f):
@@ -135,9 +137,19 @@ def snap_async(source: str, rtsp_url: str):
 
 # GPIO Button callbacks (return immediately!)
 def btn1_pressed():
-    print(f"[GPIO] 🔔 BUTTON 1 PRESSED - Triggering r1 capture...")
+    current_time = time.time()
+    
     with gpio_trigger_lock:
+        # Check debounce - ignore if triggered too recently
+        if current_time - last_trigger_time['r1'] < MIN_TRIGGER_INTERVAL:
+            print(f"[GPIO] ⚠ r1 trigger ignored (debounce protection)")
+            return
+        
+        # Update trigger time and count
+        last_trigger_time['r1'] = current_time
         gpio_triggers['r1'] += 1
+    
+    print(f"[GPIO] 🔔 BUTTON 1 PRESSED - Triggering r1 capture...")
     
     rtsp = get_rtsp_url("r1")
     if rtsp and is_camera_enabled("r1"):
@@ -146,9 +158,19 @@ def btn1_pressed():
         print(f"[GPIO] ⚠ r1 disabled or no RTSP URL")
 
 def btn2_pressed():
-    print(f"[GPIO] 🔔 BUTTON 2 PRESSED - Triggering r2 capture...")
+    current_time = time.time()
+    
     with gpio_trigger_lock:
+        # Check debounce - ignore if triggered too recently
+        if current_time - last_trigger_time['r2'] < MIN_TRIGGER_INTERVAL:
+            print(f"[GPIO] ⚠ r2 trigger ignored (debounce protection)")
+            return
+        
+        # Update trigger time and count
+        last_trigger_time['r2'] = current_time
         gpio_triggers['r2'] += 1
+    
+    print(f"[GPIO] 🔔 BUTTON 2 PRESSED - Triggering r2 capture...")
     
     rtsp = get_rtsp_url("r2")
     if rtsp and is_camera_enabled("r2"):
@@ -480,50 +502,284 @@ button:hover { background: #5568d3; }
 """
 
 DASHBOARD_TEMPLATE = """<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CamCap Dashboard</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: system-ui, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; }
-.container { max-width: 1400px; margin: 0 auto; }
-.header { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.tabs { background: white; padding: 10px; border-radius: 10px; margin-bottom: 20px; display: flex; gap: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.tab-btn { flex: 1; padding: 12px; background: #f5f5f5; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.3s; }
-.tab-btn.active { background: #667eea; color: white; }
+body { 
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); 
+  min-height: 100vh;
+  color: #2c3e50;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+.header { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 25px 30px; 
+  border-radius: 20px; 
+  margin-bottom: 25px; 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.header h1 { 
+  font-size: 28px; 
+  font-weight: 700; 
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tabs { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 8px; 
+  border-radius: 20px; 
+  margin-bottom: 25px; 
+  display: flex; 
+  gap: 8px; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.tab-btn { 
+  flex: 1; 
+  padding: 15px 20px; 
+  background: transparent; 
+  border: none; 
+  border-radius: 15px; 
+  cursor: pointer; 
+  font-size: 15px; 
+  font-weight: 600; 
+  transition: all 0.3s ease;
+  color: #7f8c8d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.tab-btn:hover { 
+  background: rgba(52, 152, 219, 0.1); 
+  color: #3498db;
+}
+.tab-btn.active { 
+  background: linear-gradient(135deg, #3498db, #2980b9); 
+  color: white; 
+  box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+}
 .tab-content { display: none; }
 .tab-content.active { display: block; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
-.card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.card h3 { margin-bottom: 15px; color: #333; }
-.stat-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+.card { 
+  background: rgba(255, 255, 255, 0.95); 
+  backdrop-filter: blur(10px);
+  padding: 25px; 
+  border-radius: 20px; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.card:hover { 
+  transform: translateY(-2px); 
+  box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+}
+.card h3 { 
+  margin-bottom: 20px; 
+  color: #2c3e50; 
+  font-size: 18px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stat-row { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  padding: 12px 0; 
+  border-bottom: 1px solid rgba(236, 240, 241, 0.8); 
+  transition: background 0.2s ease;
+}
+.stat-row:hover { background: rgba(236, 240, 241, 0.3); }
 .stat-row:last-child { border-bottom: none; }
-.stat-label { color: #666; }
-.stat-value { font-weight: bold; color: #333; }
-.btn { padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 5px; }
-.btn:hover { background: #5568d3; }
-.btn-danger { background: #f44336; }
-.btn-danger:hover { background: #da190b; }
-.btn-success { background: #4CAF50; }
-.btn-success:hover { background: #45a049; }
-.online { color: #4CAF50; font-weight: bold; }
-.offline { color: #f44336; font-weight: bold; }
-.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.image-card { border: 1px solid #ddd; border-radius: 10px; padding: 10px; background: white; }
-.image-card img { width: 100%; height: auto; border-radius: 8px; cursor: pointer; }
-.image-meta { font-size: 12px; color: #555; margin-top: 6px; }
-input, select { padding: 10px; border: 2px solid #ddd; border-radius: 8px; font-size: 14px; }
-.config-item { background: #f9f9f9; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
-.config-item label { display: block; font-weight: 600; margin-bottom: 5px; color: #555; }
-.config-item input[type="text"] { width: 100%; margin-bottom: 10px; }
+.stat-label { color: #7f8c8d; font-weight: 500; }
+.stat-value { font-weight: 600; color: #2c3e50; }
+.btn { 
+  padding: 12px 24px; 
+  background: linear-gradient(135deg, #3498db, #2980b9); 
+  color: white; 
+  border: none; 
+  border-radius: 12px; 
+  cursor: pointer; 
+  font-size: 14px; 
+  font-weight: 600;
+  margin: 5px; 
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn:hover { 
+  background: linear-gradient(135deg, #2980b9, #1f4e79); 
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+}
+.btn-danger { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+.btn-danger:hover { background: linear-gradient(135deg, #c0392b, #a93226); }
+.btn-success { background: linear-gradient(135deg, #27ae60, #229954); }
+.btn-success:hover { background: linear-gradient(135deg, #229954, #1e8449); }
+.online { color: #27ae60; font-weight: 600; }
+.offline { color: #e74c3c; font-weight: 600; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
+.image-card { 
+  border: 1px solid rgba(236, 240, 241, 0.8); 
+  border-radius: 15px; 
+  padding: 15px; 
+  background: rgba(255, 255, 255, 0.8); 
+  transition: all 0.3s ease;
+}
+.image-card:hover { 
+  transform: translateY(-2px); 
+  box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+}
+.image-card img { 
+  width: 100%; 
+  height: auto; 
+  border-radius: 12px; 
+  cursor: pointer; 
+  transition: transform 0.3s ease;
+}
+.image-card img:hover { transform: scale(1.02); }
+.image-meta { font-size: 13px; color: #7f8c8d; margin-top: 10px; }
+input, select { 
+  padding: 12px 16px; 
+  border: 2px solid rgba(236, 240, 241, 0.8); 
+  border-radius: 12px; 
+  font-size: 14px; 
+  background: rgba(255, 255, 255, 0.9);
+  transition: all 0.3s ease;
+  width: 100%;
+}
+input:focus, select:focus { 
+  outline: none; 
+  border-color: #3498db; 
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+.config-item { 
+  background: rgba(248, 249, 250, 0.8); 
+  padding: 20px; 
+  border-radius: 15px; 
+  margin-bottom: 20px; 
+  border: 1px solid rgba(236, 240, 241, 0.5);
+}
+.config-item label { 
+  display: block; 
+  font-weight: 600; 
+  margin-bottom: 8px; 
+  color: #2c3e50; 
+  font-size: 14px;
+}
+.config-item input[type="text"] { width: 100%; margin-bottom: 15px; }
 .config-item input[type="checkbox"] { width: 20px; height: 20px; margin-right: 10px; }
-.trigger-indicator { background: #f5f5f5; padding: 15px; border-radius: 10px; margin-bottom: 10px; display: flex; align-items: center; gap: 15px; }
-.trigger-light { width: 30px; height: 30px; border-radius: 50%; background: #ddd; }
-.trigger-light.active { background: #4CAF50; box-shadow: 0 0 20px #4CAF50; animation: pulse 1s infinite; }
-@keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
-.pagination { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
-.pagination button { padding: 8px 16px; }
+
+/* Toggle Switch Styles */
+.toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+.toggle-switch {
+  position: relative;
+  width: 50px;
+  height: 26px;
+  background: #bdc3c7;
+  border-radius: 13px;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+.toggle-switch.active {
+  background: #27ae60;
+}
+.toggle-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.toggle-switch.active::before {
+  transform: translateX(24px);
+}
+.toggle-label {
+  font-weight: 500;
+  color: #2c3e50;
+  cursor: pointer;
+}
+
+.trigger-indicator { 
+  background: rgba(248, 249, 250, 0.8); 
+  padding: 20px; 
+  border-radius: 15px; 
+  margin-bottom: 15px; 
+  display: flex; 
+  align-items: center; 
+  gap: 20px;
+  border: 1px solid rgba(236, 240, 241, 0.5);
+}
+.trigger-light { 
+  width: 35px; 
+  height: 35px; 
+  border-radius: 50%; 
+  background: #bdc3c7; 
+  transition: all 0.3s ease;
+  position: relative;
+}
+.trigger-light.active { 
+  background: #27ae60; 
+  box-shadow: 0 0 20px rgba(39, 174, 96, 0.5); 
+  animation: pulse 1s infinite;
+}
+@keyframes pulse { 
+  0%, 100% { transform: scale(1); } 
+  50% { transform: scale(1.1); } 
+}
+.pagination { 
+  display: flex; 
+  gap: 8px; 
+  justify-content: center; 
+  margin-top: 25px; 
+  flex-wrap: wrap;
+}
+.pagination button { 
+  padding: 10px 16px; 
+  border-radius: 10px;
+  min-width: 40px;
+}
+
+/* Loading states */
+.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .container { padding: 15px; }
+  .header { flex-direction: column; gap: 15px; text-align: center; }
+  .tabs { flex-direction: column; }
+  .grid { grid-template-columns: 1fr; }
+  .image-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+}
 </style>
 </head>
 <body>
@@ -531,15 +787,16 @@ input, select { padding: 10px; border: 2px solid #ddd; border-radius: 8px; font-
   <div class="header">
     <h1>📷 CamCap Dashboard</h1>
     <div>
+      <button class="btn" onclick="manualSnap()">📸 Manual Snap</button>
       <a href="/logout" class="btn btn-danger">🚪 Logout</a>
     </div>
   </div>
   
   <div class="tabs">
-    <button class="tab-btn active" onclick="showTab('dashboard')">🏠 Dashboard</button>
+    <button class="tab-btn active" onclick="showTab('dashboard')">📊 Dashboard</button>
     <button class="tab-btn" onclick="showTab('config')">⚙️ Configuration</button>
     <button class="tab-btn" onclick="showTab('storage')">💾 Storage</button>
-    <button class="tab-btn" onclick="showTab('images')">📅 Images</button>
+    <button class="tab-btn" onclick="showTab('images')">🖼️ Images</button>
   </div>
   
   <!-- Dashboard Tab -->
@@ -631,6 +888,19 @@ function showTab(name) {
   if (name === 'config') loadConfig();
   else if (name === 'storage') loadStorage();
   else if (name === 'images') { document.getElementById('date-picker').value = new Date().toISOString().split('T')[0]; }
+}
+
+function manualSnap() {
+  fetch('/snap', {method: 'POST'})
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        alert('Image captured successfully!');
+        updateDashboard();
+      } else {
+        alert('Failed to capture image: ' + data.error);
+      }
+    });
 }
 
 async function updateDashboard() {
