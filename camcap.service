@@ -1,0 +1,17 @@
+[Unit]
+Description=CamCap button-RTSP snapshot + uploader + Flask UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/camcap
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/pi/camcap/.env
+ExecStart=/home/pi/camcap/.venv/bin/python /home/pi/camcap/app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

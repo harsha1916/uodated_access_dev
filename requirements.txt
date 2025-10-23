@@ -1,26 +1,5 @@
-# Core dependencies
-opencv-python==4.8.1.78
-numpy==1.24.3
-
-# Web framework
-Flask==3.0.0
-flask-cors==4.0.0
-Werkzeug==3.0.1
-
-# Authentication
-bcrypt==4.1.1
-
-# HTTP and API
-requests==2.31.0
-urllib3==2.1.0
-
-# Environment and configuration
-python-dotenv==1.0.0
-
-# GPIO support (Raspberry Pi only)
-# Uncomment the following line if running on Raspberry Pi
-# RPi.GPIO==0.7.1
-
-# Optional: Production WSGI server
-# gunicorn==21.2.0
-
+Flask==3.0.3
+gpiozero==2.0.1
+RPi.GPIO==0.7.1
+python-dotenv==1.0.1
+requests==2.32.3
