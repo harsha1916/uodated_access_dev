@@ -106,8 +106,9 @@ def get_rtsp_url(source: str) -> str:
         return os.getenv("CAM2_RTSP", "")
     return ""
 
-# Capture function
+# Capture function (runs in background thread)
 def snap(source: str, rtsp_url: str):
+    """Capture image from RTSP camera."""
     ts = epoch_now()
     out_path = filename_for(source, ts)
     
@@ -115,6 +116,7 @@ def snap(source: str, rtsp_url: str):
         print(f"[SNAP] {source} is disabled, skipping")
         return
     
+    print(f"[SNAP] Capturing {source}...")
     ok = grab_jpeg(rtsp_url, out_path)
     if ok:
         add_image(out_path, source, ts)
@@ -122,22 +124,38 @@ def snap(source: str, rtsp_url: str):
     else:
         print(f"[SNAP] ✗ {source} failed")
 
-# GPIO Button callbacks
+def snap_async(source: str, rtsp_url: str):
+    """Capture image in background thread (non-blocking)."""
+    thread = threading.Thread(
+        target=snap,
+        args=(source, rtsp_url),
+        daemon=True,
+        name=f"Capture-{source}"
+    )
+    thread.start()
+
+# GPIO Button callbacks (return immediately!)
 def btn1_pressed():
-    print(f"[GPIO] 🔔 BUTTON 1 PRESSED - Capturing r1...")
+    print(f"[GPIO] 🔔 BUTTON 1 PRESSED - Triggering r1 capture...")
     with gpio_trigger_lock:
         gpio_triggers['r1'] += 1
+    
     rtsp = get_rtsp_url("r1")
     if rtsp and is_camera_enabled("r1"):
-        snap("r1", rtsp)
+        snap_async("r1", rtsp)  # Non-blocking!
+    else:
+        print(f"[GPIO] ⚠ r1 disabled or no RTSP URL")
 
 def btn2_pressed():
-    print(f"[GPIO] 🔔 BUTTON 2 PRESSED - Capturing r2...")
+    print(f"[GPIO] 🔔 BUTTON 2 PRESSED - Triggering r2 capture...")
     with gpio_trigger_lock:
         gpio_triggers['r2'] += 1
+    
     rtsp = get_rtsp_url("r2")
     if rtsp and is_camera_enabled("r2"):
-        snap("r2", rtsp)
+        snap_async("r2", rtsp)  # Non-blocking!
+    else:
+        print(f"[GPIO] ⚠ r2 disabled or no RTSP URL")
 
 # Setup GPIO buttons
 try:
@@ -406,11 +424,11 @@ def api_update_config():
 @app.post("/snap")
 @login_required
 def snap_manual():
-    """Manual capture."""
+    """Manual capture (non-blocking)."""
     which = request.form.get("which", "r1")
     rtsp = get_rtsp_url(which)
     if rtsp and is_camera_enabled(which):
-        snap(which, rtsp)
+        snap_async(which, rtsp)  # Non-blocking!
     return redirect(url_for("index"))
 
 @app.post("/cleanup")
