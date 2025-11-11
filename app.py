@@ -5,13 +5,15 @@ import signal
 import hashlib
 from datetime import datetime
 from functools import wraps
+from typing import Optional
+
 from dotenv import load_dotenv, set_key
 from flask import Flask, render_template_string, send_from_directory, request, redirect, url_for, session, jsonify, flash
 from gpiozero import Button
 from rtsp_capture import grab_jpeg
-from storage import (init_db, add_image, list_recent, delete_older_than, 
+from storage import (init_db, add_image, list_recent, delete_older_than,
                      get_storage_stats, get_images_by_date, get_images_by_date_count, get_date_list, get_pending_batch)
-from uploader import Uploader
+from uploader import Uploader, JSONQueueWorker
 from health_monitor import HealthMonitor
 
 # Load environment
@@ -47,6 +49,8 @@ UPLOAD_ENDPOINT = os.getenv("UPLOAD_ENDPOINT", "")
 UPLOAD_AUTH_BEARER = os.getenv("UPLOAD_AUTH_BEARER", "")
 UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "file")
 UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() == "true"
+JSON_UPLOAD_ENABLED = os.getenv("JSON_UPLOAD_ENABLED", "false").lower() == "true"
+JSON_UPLOAD_URL = os.getenv("JSON_UPLOAD_URL", "")
 
 # Initialize
 os.makedirs(MEDIA_DIR, exist_ok=True)
@@ -57,11 +61,120 @@ app.secret_key = SECRET_KEY
 
 # Global services
 health_monitor = HealthMonitor()
-uploader = None
+
+# Upload worker management
+uploader_lock = threading.Lock()
+uploader: Optional[object] = None
+uploader_thread: Optional[threading.Thread] = None
+ACTIVE_UPLOAD_MODE = "DISABLED"
+ACTIVE_UPLOAD_ENDPOINT = ""
+
 gpio_triggers = {'r1': 0, 'r2': 0}
 gpio_trigger_lock = threading.Lock()
 last_trigger_time = {'r1': 0, 'r2': 0}
 MIN_TRIGGER_INTERVAL = 1.0  # Minimum 1 second between triggers
+
+
+def update_cached_upload_settings():
+    """Refresh cached upload-related environment variables."""
+    global UPLOAD_MODE, UPLOAD_ENDPOINT, UPLOAD_AUTH_BEARER, UPLOAD_FIELD_NAME
+    global UPLOAD_ENABLED, JSON_UPLOAD_ENABLED, JSON_UPLOAD_URL
+
+    load_dotenv()
+    UPLOAD_MODE = os.getenv("UPLOAD_MODE", "POST").upper()
+    UPLOAD_ENDPOINT = os.getenv("UPLOAD_ENDPOINT", "")
+    UPLOAD_AUTH_BEARER = os.getenv("UPLOAD_AUTH_BEARER", "")
+    UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "file")
+    UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() == "true"
+    JSON_UPLOAD_ENABLED = os.getenv("JSON_UPLOAD_ENABLED", "false").lower() == "true"
+    JSON_UPLOAD_URL = os.getenv("JSON_UPLOAD_URL", "")
+
+
+def stop_uploader():
+    """Stop whichever uploader is currently running."""
+    global uploader, uploader_thread, ACTIVE_UPLOAD_MODE, ACTIVE_UPLOAD_ENDPOINT
+
+    if uploader:
+        try:
+            uploader.stop()
+        except AttributeError:
+            pass
+
+    if uploader_thread and uploader_thread.is_alive():
+        uploader_thread.join(timeout=5)
+
+    uploader = None
+    uploader_thread = None
+    ACTIVE_UPLOAD_MODE = "DISABLED"
+    ACTIVE_UPLOAD_ENDPOINT = ""
+
+
+def simple_presigner(filename: str):
+    return None
+
+
+def start_s3_uploader():
+    """Start the S3 uploader worker if enabled."""
+    global uploader, uploader_thread, ACTIVE_UPLOAD_MODE, ACTIVE_UPLOAD_ENDPOINT
+
+    if not UPLOAD_ENABLED:
+        ACTIVE_UPLOAD_MODE = "DISABLED"
+        ACTIVE_UPLOAD_ENDPOINT = ""
+        return
+
+    print("[UPLOADER] Starting S3 uploader worker")
+    s3 = Uploader(
+        mode=UPLOAD_MODE,
+        endpoint=UPLOAD_ENDPOINT or None,
+        bearer_token=UPLOAD_AUTH_BEARER or None,
+        field_name=UPLOAD_FIELD_NAME,
+        presigner=simple_presigner if UPLOAD_MODE == "PUT" else None,
+        batch_size=5
+    )
+    thread = threading.Thread(target=s3.run_forever, daemon=True)
+    uploader = s3
+    uploader_thread = thread
+    thread.start()
+    ACTIVE_UPLOAD_MODE = UPLOAD_MODE
+    ACTIVE_UPLOAD_ENDPOINT = UPLOAD_ENDPOINT
+
+
+def start_json_uploader():
+    """Start the JSON upload worker if configured."""
+    global uploader, uploader_thread, ACTIVE_UPLOAD_MODE, ACTIVE_UPLOAD_ENDPOINT
+
+    if not JSON_UPLOAD_URL:
+        print("[JSON-UPLOADER] JSON upload URL not configured; cannot start worker")
+        ACTIVE_UPLOAD_MODE = "DISABLED"
+        ACTIVE_UPLOAD_ENDPOINT = ""
+        return
+
+    print("[JSON-UPLOADER] Starting JSON uploader worker")
+    json_worker = JSONQueueWorker(endpoint=JSON_UPLOAD_URL)
+    thread = threading.Thread(target=json_worker.run_forever, daemon=True)
+    uploader = json_worker
+    uploader_thread = thread
+    thread.start()
+    ACTIVE_UPLOAD_MODE = "JSON"
+    ACTIVE_UPLOAD_ENDPOINT = JSON_UPLOAD_URL
+
+
+def refresh_upload_mode():
+    """Ensure the correct uploader is running based on current settings."""
+    with uploader_lock:
+        update_cached_upload_settings()
+        json_active = JSON_UPLOAD_ENABLED and bool(JSON_UPLOAD_URL)
+
+        if uploader:
+            stop_uploader()
+
+        if json_active:
+            start_json_uploader()
+        elif UPLOAD_ENABLED:
+            start_s3_uploader()
+        else:
+            ACTIVE_UPLOAD_MODE = "DISABLED"
+            ACTIVE_UPLOAD_ENDPOINT = ""
 
 # Authentication decorator
 def login_required(f):
@@ -212,24 +325,8 @@ except Exception as e:
     print(f"[GPIO] ⚠ Failed to initialize buttons: {e}")
     btn1 = btn2 = None
 
-# Initialize uploader
-def simple_presigner(filename: str):
-    return None
-
-uploader = Uploader(
-    mode=UPLOAD_MODE,
-    endpoint=UPLOAD_ENDPOINT if UPLOAD_ENABLED else None,
-    bearer_token=UPLOAD_AUTH_BEARER or None,
-    field_name=UPLOAD_FIELD_NAME,
-    presigner=simple_presigner if UPLOAD_MODE == "PUT" else None,
-    batch_size=5
-)
-
-def uploader_thread():
-    uploader.run_forever()
-
-th = threading.Thread(target=uploader_thread, daemon=True)
-th.start()
+# Initialize uploader workers based on current configuration
+refresh_upload_mode()
 
 # Cleanup task
 def cleanup_thread():
@@ -294,11 +391,31 @@ def image_raw(filename):
 def api_status():
     """Get system status."""
     stats = get_storage_stats()
-    upload_stats = uploader.get_stats()
-    
-    # Get pending count
     pending_upload = get_pending_batch(100)
-    
+
+    update_cached_upload_settings()
+
+    with uploader_lock:
+        current_uploader = uploader
+        current_mode = ACTIVE_UPLOAD_MODE
+        current_endpoint = ACTIVE_UPLOAD_ENDPOINT
+        upload_stats = current_uploader.get_stats() if current_uploader else {}
+
+    json_active = JSON_UPLOAD_ENABLED and bool(JSON_UPLOAD_URL)
+    s3_active = UPLOAD_ENABLED and current_mode != "JSON"
+    enabled = json_active or (s3_active and current_mode != "DISABLED")
+
+    endpoint_info = {}
+    if current_mode == "JSON" and current_endpoint:
+        endpoint_info["json_url"] = current_endpoint
+    elif current_mode != "DISABLED" and current_endpoint:
+        endpoint_info["endpoint"] = current_endpoint
+
+    upload_stats = upload_stats.copy() if upload_stats else {}
+    upload_stats.setdefault('offline_mode', False)
+    upload_stats.setdefault('total_uploaded', 0)
+    upload_stats.setdefault('total_failed', 0)
+
     return jsonify({
         'cameras': {
             'r1': {'enabled': is_camera_enabled('r1'), 'rtsp_configured': bool(get_rtsp_url('r1'))},
@@ -307,8 +424,10 @@ def api_status():
         'storage': stats,
         'upload': {
             **upload_stats,
+            **endpoint_info,
             'pending_count': len(pending_upload),
-            'enabled': UPLOAD_ENABLED
+            'enabled': enabled,
+            'mode': current_mode
         },
         'gpio_triggers': gpio_triggers.copy()
     })
@@ -402,6 +521,7 @@ def api_dates():
 def api_get_config():
     """Get current configuration."""
     load_dotenv()
+    update_cached_upload_settings()
     return jsonify({
         'cameras': {
             'r1': {
@@ -419,7 +539,13 @@ def api_get_config():
         },
         'upload': {
             'enabled': UPLOAD_ENABLED,
-            'endpoint': os.getenv('UPLOAD_ENDPOINT', '')
+            'endpoint': UPLOAD_ENDPOINT,
+            'auth_bearer': UPLOAD_AUTH_BEARER,
+            'mode': ACTIVE_UPLOAD_MODE
+        },
+        'json_upload': {
+            'enabled': JSON_UPLOAD_ENABLED,
+            'url': JSON_UPLOAD_URL
         }
     })
 
@@ -458,8 +584,21 @@ def api_update_config():
                 set_key(env_file, 'UPLOAD_ENABLED', str(data['upload']['enabled']).lower())
             if 'endpoint' in data['upload']:
                 set_key(env_file, 'UPLOAD_ENDPOINT', data['upload']['endpoint'])
+            if 'auth_bearer' in data['upload']:
+                set_key(env_file, 'UPLOAD_AUTH_BEARER', data['upload']['auth_bearer'] or '')
+
+        if 'json_upload' in data:
+            json_cfg = data['json_upload']
+            desired_url = json_cfg.get('url', os.getenv('JSON_UPLOAD_URL', ''))
+            if json_cfg.get('enabled') and not desired_url:
+                return jsonify({'success': False, 'error': 'JSON upload URL required when enabling JSON upload'}), 400
+            if 'enabled' in json_cfg:
+                set_key(env_file, 'JSON_UPLOAD_ENABLED', str(json_cfg['enabled']).lower())
+            if 'url' in json_cfg:
+                set_key(env_file, 'JSON_UPLOAD_URL', json_cfg['url'])
         
         load_dotenv(override=True)
+        refresh_upload_mode()
         return jsonify({'success': True, 'message': 'Configuration updated'})
     
     except Exception as e:
@@ -485,8 +624,8 @@ def cleanup_now():
 
 # Signal handling
 def handle_signal(signum, frame):
-    if uploader:
-        uploader.stop()
+    with uploader_lock:
+        stop_uploader()
     os._exit(0)
 
 signal.signal(signal.SIGTERM, handle_signal)
@@ -952,11 +1091,23 @@ async function updateDashboard() {
     </div>`;
     
     // Upload status
-    const upload = status.upload;
+    const upload = status.upload || {};
+    const uploadMode = upload.mode || (upload.enabled ? 'UNKNOWN' : 'DISABLED');
+    const statusText = !upload.enabled
+      ? '⚪ DISABLED'
+      : upload.mode === 'JSON'
+        ? (upload.offline_mode ? '🟠 JSON OFFLINE' : '🟢 JSON MODE')
+        : (upload.offline_mode ? '🟠 OFFLINE' : '🟢 ONLINE');
+    const endpointLabel = upload.mode === 'JSON' ? 'JSON URL' : 'Endpoint';
+    const endpointValue = upload.json_url || upload.endpoint || 'N/A';
     document.getElementById('upload-status').innerHTML = `
       <div class="stat-row">
+        <span class="stat-label">Mode</span>
+        <span class="stat-value">${uploadMode}</span>
+      </div>
+      <div class="stat-row">
         <span class="stat-label">Status</span>
-        <span class="stat-value ${upload.offline_mode ? 'offline' : 'online'}">${upload.offline_mode ? '🔴 OFFLINE' : '🟢 ONLINE'}</span>
+        <span class="stat-value ${upload.offline_mode ? 'offline' : 'online'}">${statusText}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">Uploaded</span>
@@ -965,6 +1116,10 @@ async function updateDashboard() {
       <div class="stat-row">
         <span class="stat-label">Pending</span>
         <span class="stat-value">${upload.pending_count || 0}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">${endpointLabel}</span>
+        <span class="stat-value">${endpointValue}</span>
       </div>`;
     
     // GPIO triggers
@@ -1008,19 +1163,53 @@ async function loadConfig() {
     }
     document.getElementById('config-cameras').innerHTML = camHTML;
     
+    const jsonEnabled = config.json_upload && config.json_upload.enabled;
+    const s3Enabled = config.upload.enabled && !jsonEnabled;
     document.getElementById('config-upload').innerHTML = `<div class="config-item">
-      <label><input type="checkbox" id="upload-enabled" ${config.upload.enabled ? 'checked' : ''}> <strong>Enable S3 Upload</strong></label>
+      <label><input type="checkbox" id="upload-enabled" ${s3Enabled ? 'checked' : ''}> <strong>Enable S3 Upload</strong></label>
       <label>S3 Endpoint URL</label>
-      <input type="text" id="upload-endpoint" value="${config.upload.endpoint}">
+      <input type="text" id="upload-endpoint" value="${config.upload.endpoint || ''}">
+      <label>Bearer Token</label>
+      <input type="text" id="upload-auth" value="${config.upload.auth_bearer || ''}">
+      <hr style="margin: 20px 0;">
+      <label><input type="checkbox" id="json-upload-enabled" ${jsonEnabled ? 'checked' : ''} onchange="handleJsonToggle()"> <strong>Enable JSON Upload (disables S3)</strong></label>
+      <label>JSON Upload Endpoint</label>
+      <input type="text" id="json-upload-endpoint" value="${(config.json_upload && config.json_upload.url) || ''}">
+      <p style="font-size: 13px; color: #7f8c8d; margin-top: 10px;">
+        When enabled, images are compressed, base64 encoded, and sent with reader details to the JSON endpoint. S3 uploads pause automatically while JSON upload is active.
+      </p>
     </div>`;
+    handleJsonToggle();
     
   } catch (e) {
     console.error('Load config error:', e);
   }
 }
 
+function handleJsonToggle() {
+  const jsonToggle = document.getElementById('json-upload-enabled');
+  const uploadEnabled = document.getElementById('upload-enabled');
+  const uploadEndpoint = document.getElementById('upload-endpoint');
+  const uploadAuth = document.getElementById('upload-auth');
+  const jsonEnabled = jsonToggle ? jsonToggle.checked : false;
+  
+  if (uploadEnabled) {
+    uploadEnabled.disabled = jsonEnabled;
+    if (jsonEnabled) {
+      uploadEnabled.checked = false;
+    }
+  }
+  if (uploadEndpoint) {
+    uploadEndpoint.disabled = jsonEnabled;
+  }
+  if (uploadAuth) {
+    uploadAuth.disabled = jsonEnabled;
+  }
+}
+
 async function saveConfig() {
   try {
+    const jsonEnabled = document.getElementById('json-upload-enabled') ? document.getElementById('json-upload-enabled').checked : false;
     const config = {
       cameras: {
         r1: {
@@ -1035,8 +1224,13 @@ async function saveConfig() {
         }
       },
       upload: {
-        enabled: document.getElementById('upload-enabled').checked,
-        endpoint: document.getElementById('upload-endpoint').value
+        enabled: jsonEnabled ? false : document.getElementById('upload-enabled').checked,
+        endpoint: document.getElementById('upload-endpoint').value,
+        auth_bearer: document.getElementById('upload-auth').value
+      },
+      json_upload: {
+        enabled: jsonEnabled,
+        url: document.getElementById('json-upload-endpoint').value
       }
     };
     
@@ -1048,7 +1242,10 @@ async function saveConfig() {
     
     const result = await resp.json();
     alert(result.success ? '✓ Configuration saved!' : 'Error: ' + result.error);
-    if (result.success) updateDashboard();
+    if (result.success) {
+      updateDashboard();
+      loadConfig();
+    }
     
   } catch (e) {
     alert('Error saving: ' + e.message);
@@ -1142,8 +1339,14 @@ setInterval(updateDashboard, 10000);
 """
 
 if __name__ == "__main__":
+    refresh_upload_mode()
     print(f"[APP] Starting CamCap on {FLASK_HOST}:{FLASK_PORT}")
     print(f"[APP] Authentication: {'ENABLED' if WEB_AUTH_ENABLED else 'DISABLED'}")
-    print(f"[APP] Upload: {'ENABLED' if UPLOAD_ENABLED else 'DISABLED'}")
+    if ACTIVE_UPLOAD_MODE == "JSON":
+        print(f"[APP] Upload Mode: JSON ({ACTIVE_UPLOAD_ENDPOINT or 'NO URL CONFIGURED'})")
+    elif ACTIVE_UPLOAD_MODE != "DISABLED":
+        print(f"[APP] Upload Mode: {ACTIVE_UPLOAD_MODE} ({ACTIVE_UPLOAD_ENDPOINT or 'NO ENDPOINT CONFIGURED'})")
+    else:
+        print("[APP] Upload Mode: DISABLED")
     print(f"[APP] Cameras: r1={'ENABLED' if is_camera_enabled('r1') else 'DISABLED'}, r2={'ENABLED' if is_camera_enabled('r2') else 'DISABLED'}")
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
