@@ -1,5 +1,6 @@
 import os
 import time
+import shutil
 import requests
 import threading
 from datetime import datetime
@@ -291,6 +292,13 @@ class JSONQueueWorker:
             "r2": int(os.getenv("READER_ID_R2", "2")),
         }
 
+        # JSON persistence directories
+        self.base_dir = os.path.join("json_uploads")
+        self.pending_dir = os.path.join(self.base_dir, "pending")
+        self.uploaded_dir = os.path.join(self.base_dir, "uploaded")
+        os.makedirs(self.pending_dir, exist_ok=True)
+        os.makedirs(self.uploaded_dir, exist_ok=True)
+
     def stop(self):
         self._stop = True
 
@@ -347,11 +355,40 @@ class JSONQueueWorker:
 
         return {
             "reader_id": reader_id,
+            "source": item.get("source"),
             "timestamp": timestamp,
             "iso_timestamp": datetime.fromtimestamp(timestamp).isoformat(),
             "filename": os.path.basename(filepath),
+            "image_path": filepath,
             "image_base64": base64_image,
         }
+
+    def _save_pending_payload(self, payload: Dict, image_filename: str) -> Optional[str]:
+        try:
+            json_path = self.json_uploader.save_json_locally(payload, image_filename)
+            return json_path
+        except Exception as exc:
+            print(f"[JSON-UPLOADER] ⚠ Failed to persist JSON payload: {exc}")
+            return None
+
+    def _move_to_uploaded(self, json_path: str):
+        try:
+            if not json_path or not os.path.exists(json_path):
+                return
+            filename = os.path.basename(json_path)
+            dest = os.path.join(self.uploaded_dir, filename)
+            shutil.move(json_path, dest)
+        except Exception as exc:
+            print(f"[JSON-UPLOADER] ⚠ Failed to archive JSON payload: {exc}")
+
+    def _cleanup_pending(self, image_filename: str):
+        try:
+            basename = os.path.splitext(os.path.basename(image_filename))[0] + ".json"
+            candidate = os.path.join(self.pending_dir, basename)
+            if os.path.exists(candidate):
+                os.remove(candidate)
+        except Exception:
+            pass
 
     def upload_item(self, item: Dict) -> bool:
         if not self.endpoint:
@@ -361,6 +398,7 @@ class JSONQueueWorker:
         filepath = item["filename"]
         if not os.path.exists(filepath):
             print(f"[JSON-UPLOADER] File missing, marking uploaded: {os.path.basename(filepath)}")
+            self._cleanup_pending(filepath)
             return True
 
         payload = self._build_payload(item)
@@ -368,9 +406,14 @@ class JSONQueueWorker:
             print(f"[JSON-UPLOADER] Failed to build payload for {os.path.basename(filepath)}")
             return False
 
+        json_path = self._save_pending_payload(payload, filepath)
+
         self.json_uploader.custom_url = self.endpoint
         print(f"[JSON-UPLOADER] Uploading {os.path.basename(filepath)} to {self.endpoint}")
-        return self.json_uploader.upload(payload)
+        success = self.json_uploader.upload(payload)
+        if success:
+            self._move_to_uploaded(json_path)
+        return success
 
     def run_forever(self):
         print("[JSON-UPLOADER] Background JSON upload thread started")
