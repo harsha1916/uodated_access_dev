@@ -3,6 +3,7 @@ import time
 import threading
 import signal
 import hashlib
+from typing import Optional
 from datetime import datetime
 from functools import wraps
 from dotenv import load_dotenv, set_key
@@ -11,7 +12,7 @@ from gpiozero import Button
 from rtsp_capture import grab_jpeg
 from storage import (init_db, add_image, list_recent, delete_older_than, 
                      get_storage_stats, get_images_by_date, get_images_by_date_count, get_date_list, get_pending_batch)
-from uploader import Uploader
+from uploader import Uploader, JSONQueueWorker
 from health_monitor import HealthMonitor
 
 # Load environment
@@ -47,6 +48,8 @@ UPLOAD_ENDPOINT = os.getenv("UPLOAD_ENDPOINT", "")
 UPLOAD_AUTH_BEARER = os.getenv("UPLOAD_AUTH_BEARER", "")
 UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "file")
 UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() == "true"
+JSON_UPLOAD_ENABLED = os.getenv("JSON_UPLOAD_ENABLED", "false").lower() == "true"
+JSON_UPLOAD_URL = os.getenv("JSON_UPLOAD_URL", "")
 
 # Offline mode settings
 OFFLINE_RETRY_INTERVAL = int(os.getenv("OFFLINE_RETRY_INTERVAL", "60"))
@@ -58,8 +61,102 @@ app.secret_key = SECRET_KEY
 
 # Initialize services
 init_db()
-uploader = Uploader(mode=UPLOAD_MODE, endpoint=UPLOAD_ENDPOINT, bearer_token=UPLOAD_AUTH_BEARER, field_name=UPLOAD_FIELD_NAME)
 health_monitor = HealthMonitor()
+
+# Upload worker management
+uploader_lock = threading.Lock()
+s3_uploader: Optional[Uploader] = None
+s3_uploader_thread: Optional[threading.Thread] = None
+json_uploader_worker: Optional[JSONQueueWorker] = None
+json_uploader_thread: Optional[threading.Thread] = None
+
+
+def update_cached_upload_settings():
+    """Refresh cached upload-related environment variables."""
+    global UPLOAD_MODE, UPLOAD_ENDPOINT, UPLOAD_AUTH_BEARER, UPLOAD_FIELD_NAME
+    global UPLOAD_ENABLED, JSON_UPLOAD_ENABLED, JSON_UPLOAD_URL
+
+    UPLOAD_MODE = os.getenv("UPLOAD_MODE", "POST").upper()
+    UPLOAD_ENDPOINT = os.getenv("UPLOAD_ENDPOINT", "")
+    UPLOAD_AUTH_BEARER = os.getenv("UPLOAD_AUTH_BEARER", "")
+    UPLOAD_FIELD_NAME = os.getenv("UPLOAD_FIELD_NAME", "file")
+    UPLOAD_ENABLED = os.getenv("UPLOAD_ENABLED", "true").lower() == "true"
+    JSON_UPLOAD_ENABLED = os.getenv("JSON_UPLOAD_ENABLED", "false").lower() == "true"
+    JSON_UPLOAD_URL = os.getenv("JSON_UPLOAD_URL", "")
+
+
+def stop_s3_uploader():
+    global s3_uploader, s3_uploader_thread
+    if s3_uploader:
+        s3_uploader.stop()
+    if s3_uploader_thread and s3_uploader_thread.is_alive():
+        s3_uploader_thread.join(timeout=5)
+    s3_uploader = None
+    s3_uploader_thread = None
+
+
+def start_s3_uploader():
+    global s3_uploader, s3_uploader_thread
+    if s3_uploader_thread and s3_uploader_thread.is_alive():
+        return
+
+    update_cached_upload_settings()
+    print("[UPLOADER] Starting S3 uploader worker")
+    s3_uploader = Uploader(
+        mode=UPLOAD_MODE,
+        endpoint=UPLOAD_ENDPOINT if UPLOAD_ENABLED else None,
+        bearer_token=UPLOAD_AUTH_BEARER,
+        field_name=UPLOAD_FIELD_NAME,
+    )
+    s3_uploader_thread = threading.Thread(target=s3_uploader.run_forever, daemon=True)
+    s3_uploader_thread.start()
+
+
+def stop_json_uploader():
+    global json_uploader_worker, json_uploader_thread
+    if json_uploader_worker:
+        json_uploader_worker.stop()
+    if json_uploader_thread and json_uploader_thread.is_alive():
+        json_uploader_thread.join(timeout=5)
+    json_uploader_worker = None
+    json_uploader_thread = None
+
+
+def start_json_uploader():
+    global json_uploader_worker, json_uploader_thread, JSON_UPLOAD_URL
+    update_cached_upload_settings()
+    if not JSON_UPLOAD_URL:
+        print("[JSON-UPLOADER] JSON upload URL not configured; cannot start worker")
+        return
+    if json_uploader_thread and json_uploader_thread.is_alive():
+        if json_uploader_worker:
+            json_uploader_worker.set_endpoint(JSON_UPLOAD_URL)
+        return
+
+    print("[JSON-UPLOADER] Starting JSON uploader worker")
+    json_uploader_worker = JSONQueueWorker(endpoint=JSON_UPLOAD_URL)
+    json_uploader_thread = threading.Thread(target=json_uploader_worker.run_forever, daemon=True)
+    json_uploader_thread.start()
+
+
+def refresh_upload_mode():
+    with uploader_lock:
+        update_cached_upload_settings()
+        json_active = JSON_UPLOAD_ENABLED and bool(JSON_UPLOAD_URL)
+
+        if json_active:
+            stop_s3_uploader()
+            start_json_uploader()
+        else:
+            stop_json_uploader()
+            if UPLOAD_ENABLED:
+                start_s3_uploader()
+            else:
+                stop_s3_uploader()
+
+
+# Start the appropriate uploader based on current configuration
+refresh_upload_mode()
 
 # GPIO state tracking
 gpio_triggers = {"r1": False, "r2": False}
@@ -202,22 +299,40 @@ def image_raw(filename):
 def api_status():
     """Get system status."""
     stats = get_storage_stats()
-    upload_stats = uploader.get_stats()
-    
-    # Get pending count
     pending_upload = get_pending_batch(100)
-    
+
+    update_cached_upload_settings()
+
+    with uploader_lock:
+        json_active = JSON_UPLOAD_ENABLED and bool(JSON_UPLOAD_URL)
+        if json_active and json_uploader_worker:
+            upload_stats = json_uploader_worker.get_stats()
+            mode = "JSON"
+            endpoint_info = {"json_url": JSON_UPLOAD_URL}
+        elif s3_uploader:
+            upload_stats = s3_uploader.get_stats()
+            mode = UPLOAD_MODE
+            endpoint_info = {"endpoint": UPLOAD_ENDPOINT}
+        else:
+            upload_stats = {}
+            mode = "DISABLED"
+            endpoint_info = {}
+
+    upload_payload = {
+        **upload_stats,
+        **endpoint_info,
+        "pending_count": len(pending_upload),
+        "enabled": json_active or UPLOAD_ENABLED,
+        "mode": mode,
+    }
+
     return jsonify({
         'cameras': {
             'r1': {'enabled': is_camera_enabled('r1'), 'rtsp_configured': bool(get_rtsp_url('r1'))},
             'r2': {'enabled': is_camera_enabled('r2'), 'rtsp_configured': bool(get_rtsp_url('r2'))}
         },
         'storage': stats,
-        'upload': {
-            **upload_stats,
-            'pending_count': len(pending_upload),
-            'enabled': UPLOAD_ENABLED
-        },
+        'upload': upload_payload,
         'gpio_triggers': gpio_triggers.copy()
     })
 
@@ -298,6 +413,8 @@ def api_images_dates():
 @login_required
 def api_config():
     """Get current configuration."""
+    update_cached_upload_settings()
+
     return jsonify({
         'cameras': {
             'r1': {
@@ -312,7 +429,12 @@ def api_config():
         'upload': {
             'enabled': UPLOAD_ENABLED,
             'endpoint': UPLOAD_ENDPOINT,
-            'auth_bearer': UPLOAD_AUTH_BEARER
+            'auth_bearer': UPLOAD_AUTH_BEARER,
+            'mode': UPLOAD_MODE
+        },
+        'json_upload': {
+            'enabled': JSON_UPLOAD_ENABLED,
+            'url': JSON_UPLOAD_URL
         }
     })
 
@@ -351,6 +473,19 @@ def api_config_update():
                 set_key(env_file, 'UPLOAD_ENDPOINT', data['upload']['endpoint'])
             if 'auth_bearer' in data['upload']:
                 set_key(env_file, 'UPLOAD_AUTH_BEARER', data['upload']['auth_bearer'])
+
+        if 'json_upload' in data:
+            json_cfg = data['json_upload']
+            desired_url = json_cfg.get('url', os.getenv('JSON_UPLOAD_URL', ''))
+            if json_cfg.get('enabled') and not desired_url:
+                return jsonify({'success': False, 'error': 'JSON upload URL required when enabling JSON upload'}), 400
+            if 'enabled' in json_cfg:
+                set_key(env_file, 'JSON_UPLOAD_ENABLED', str(json_cfg['enabled']).lower())
+            if 'url' in json_cfg:
+                set_key(env_file, 'JSON_UPLOAD_URL', json_cfg['url'])
+        
+        load_dotenv(override=True)
+        refresh_upload_mode()
         
         return jsonify({'success': True})
         
@@ -610,6 +745,10 @@ input:focus, select:focus {
   cursor: pointer;
   transition: background 0.3s ease;
 }
+.toggle-switch.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .toggle-switch.active {
   background: #27ae60;
 }
@@ -804,6 +943,19 @@ input:focus, select:focus {
         <div class="toggle-switch" id="upload-toggle" onclick="toggleSwitch('upload-toggle')"></div>
         <span class="toggle-label">Enable Upload</span>
       </div>
+      <hr style="margin: 25px 0; border: none; border-top: 1px solid rgba(236, 240, 241, 0.8);">
+      <h4 style="margin-bottom: 15px;">🧾 JSON Upload</h4>
+      <div class="config-item">
+        <label>JSON Upload Endpoint:</label>
+        <input type="text" id="json-upload-url" placeholder="https://api.example.com/json-upload">
+      </div>
+      <div class="toggle-container">
+        <div class="toggle-switch" id="json-upload-toggle" onclick="toggleSwitch('json-upload-toggle')"></div>
+        <span class="toggle-label">Enable JSON Upload (disables S3)</span>
+      </div>
+      <p style="font-size: 13px; color: #7f8c8d; margin-top: 10px;">
+        When enabled, images are compressed, base64 encoded, and sent with reader details to the JSON endpoint. S3 uploads pause automatically while JSON upload is active.
+      </p>
       <button class="btn btn-success" onclick="saveUploadConfig()">💾 Save Upload Settings</button>
     </div>
   </div>
@@ -889,6 +1041,9 @@ function showTab(tabName) {
 
 function toggleSwitch(toggleId) {
   const toggle = document.getElementById(toggleId);
+  if (!toggle || toggle.dataset.disabled === 'true' || toggle.classList.contains('disabled')) {
+    return;
+  }
   toggle.classList.toggle('active');
 }
 
@@ -909,9 +1064,24 @@ function loadStatus() {
   fetch('/api/status')
     .then(response => response.json())
     .then(data => {
-      document.getElementById('upload-status').textContent = data.upload.enabled ? '🟢 ONLINE' : '🔴 OFFLINE';
-      document.getElementById('uploaded-count').textContent = data.upload.uploaded || 0;
-      document.getElementById('pending-count').textContent = data.upload.pending_count || 0;
+      const upload = data.upload || {};
+      const statusEl = document.getElementById('upload-status');
+      let statusText = '⚪ DISABLED';
+
+      if (upload.enabled) {
+        if (upload.mode === 'JSON') {
+          statusText = upload.offline_mode ? '🟠 JSON OFFLINE' : '🟢 JSON MODE';
+        } else {
+          statusText = upload.offline_mode ? '🟠 OFFLINE' : '🟢 ONLINE';
+        }
+      }
+
+      if (statusEl) {
+        statusEl.textContent = statusText;
+      }
+
+      document.getElementById('uploaded-count').textContent = upload.total_uploaded || 0;
+      document.getElementById('pending-count').textContent = upload.pending_count || 0;
       document.getElementById('total-images').textContent = data.storage.total || 0;
       
       // Update GPIO triggers
@@ -993,9 +1163,44 @@ function loadConfig() {
       document.getElementById('cam2-rtsp').value = data.cameras.r2.rtsp_url || '';
       document.getElementById('cam1-toggle').classList.toggle('active', data.cameras.r1.enabled);
       document.getElementById('cam2-toggle').classList.toggle('active', data.cameras.r2.enabled);
-      document.getElementById('upload-endpoint').value = data.upload.endpoint || '';
-      document.getElementById('upload-auth').value = data.upload.auth_bearer || '';
-      document.getElementById('upload-toggle').classList.toggle('active', data.upload.enabled);
+      
+      const uploadEndpoint = document.getElementById('upload-endpoint');
+      const uploadAuth = document.getElementById('upload-auth');
+      const uploadToggle = document.getElementById('upload-toggle');
+      const jsonUrlInput = document.getElementById('json-upload-url');
+      const jsonToggle = document.getElementById('json-upload-toggle');
+
+      const jsonEnabled = data.json_upload && data.json_upload.enabled;
+
+      if (uploadEndpoint) {
+        uploadEndpoint.value = data.upload.endpoint || '';
+        uploadEndpoint.disabled = !!jsonEnabled;
+      }
+      if (uploadAuth) {
+        uploadAuth.value = data.upload.auth_bearer || '';
+        uploadAuth.disabled = !!jsonEnabled;
+      }
+      if (uploadToggle) {
+        uploadToggle.dataset.disabled = jsonEnabled ? 'true' : 'false';
+        uploadToggle.classList.toggle('disabled', !!jsonEnabled);
+        if (jsonEnabled) {
+          uploadToggle.classList.remove('active');
+        } else if (data.upload.enabled) {
+          uploadToggle.classList.add('active');
+        } else {
+          uploadToggle.classList.remove('active');
+        }
+      }
+      if (jsonUrlInput) {
+        jsonUrlInput.value = (data.json_upload && data.json_upload.url) || '';
+      }
+      if (jsonToggle) {
+        if (jsonEnabled) {
+          jsonToggle.classList.add('active');
+        } else {
+          jsonToggle.classList.remove('active');
+        }
+      }
     });
 }
 
@@ -1103,11 +1308,18 @@ function saveCameraConfig() {
 }
 
 function saveUploadConfig() {
+  const jsonToggle = document.getElementById('json-upload-toggle');
+  const jsonEnabled = jsonToggle && jsonToggle.classList.contains('active');
+
   const data = {
     upload: {
       endpoint: document.getElementById('upload-endpoint').value,
       auth_bearer: document.getElementById('upload-auth').value,
-      enabled: document.getElementById('upload-toggle').classList.contains('active')
+      enabled: jsonEnabled ? false : document.getElementById('upload-toggle').classList.contains('active')
+    },
+    json_upload: {
+      enabled: jsonEnabled,
+      url: document.getElementById('json-upload-url').value
     }
   };
   
@@ -1120,6 +1332,8 @@ function saveUploadConfig() {
   .then(data => {
     if (data.success) {
       alert('Upload configuration saved successfully!');
+      loadConfig();
+      loadStatus();
     } else {
       alert('Failed to save configuration: ' + data.error);
     }
@@ -1143,11 +1357,8 @@ setInterval(() => {
 </html>"""
 
 if __name__ == "__main__":
-    # Start uploader in background
-    if UPLOAD_ENABLED:
-        uploader_thread = threading.Thread(target=uploader.run_forever, daemon=True)
-        uploader_thread.start()
-        print("[UPLOADER] Background uploader started")
+    # Ensure upload workers reflect current configuration
+    refresh_upload_mode()
     
     # Start cleanup service
     def cleanup_service():
@@ -1167,6 +1378,8 @@ if __name__ == "__main__":
     # Signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         print("\n[SHUTDOWN] Gracefully shutting down...")
+        stop_json_uploader()
+        stop_s3_uploader()
         exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)

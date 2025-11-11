@@ -1,0 +1,29 @@
+# CamCap Requirements for Raspberry Pi Zero 2W
+# Optimized for ARM architecture and limited resources
+
+# Core web framework
+Flask==3.0.3
+
+# GPIO and hardware control
+gpiozero==2.0.1
+RPi.GPIO==0.7.1
+
+# Configuration management
+python-dotenv==1.0.1
+
+# HTTP requests for uploads
+requests==2.32.3
+
+# Image processing (lightweight version)
+opencv-python-headless==4.8.1.78
+Pillow==10.0.1
+
+# Database (built-in sqlite3)
+# No additional package needed
+
+# Optional: Performance monitoring
+psutil==5.9.6
+
+# Optional: Better logging
+colorlog==6.7.0
+

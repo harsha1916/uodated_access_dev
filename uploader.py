@@ -2,7 +2,10 @@ import os
 import time
 import requests
 import threading
+from datetime import datetime
 from typing import Optional, Dict
+
+from json_uploader import JSONUploader
 from storage import get_pending_batch, mark_uploaded, mark_failed
 
 
@@ -246,3 +249,172 @@ class Uploader:
                 time.sleep(self.sleep_fail)
         
         print("[UPLOADER] Background upload thread stopped")
+
+
+class JSONQueueWorker:
+    """Upload queued images as compressed base64 JSON payloads."""
+
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        batch_size: int = 5,
+        sleep_ok: float = 5.0,
+        sleep_fail: float = 15.0,
+    ):
+        self.endpoint = endpoint or os.getenv("JSON_UPLOAD_URL", "")
+        self.batch_size = batch_size
+        self.sleep_ok = sleep_ok
+        self.sleep_fail = sleep_fail
+        self.timeout = int(os.getenv("JSON_UPLOAD_TIMEOUT", "60"))
+        self._stop = False
+
+        # Offline tracking
+        self._lock = threading.Lock()
+        self.is_online = True
+        self.last_connectivity_check = 0
+        self.connectivity_check_interval = int(os.getenv("CONNECTIVITY_CHECK_INTERVAL", "60"))
+
+        # Statistics
+        self.stats = {
+            "total_uploaded": 0,
+            "total_failed": 0,
+            "offline_mode": False,
+            "last_check": None,
+        }
+
+        self.json_uploader = JSONUploader()
+        if self.endpoint:
+            self.json_uploader.custom_url = self.endpoint
+
+        self.reader_map = {
+            "r1": int(os.getenv("READER_ID_R1", "1")),
+            "r2": int(os.getenv("READER_ID_R2", "2")),
+        }
+
+    def stop(self):
+        self._stop = True
+
+    def set_endpoint(self, endpoint: str):
+        with self._lock:
+            self.endpoint = endpoint
+            self.json_uploader.custom_url = endpoint
+
+    def _headers(self):
+        return self.json_uploader.session.headers
+
+    def get_stats(self) -> Dict:
+        with self._lock:
+            stats = self.stats.copy()
+            stats["endpoint"] = self.endpoint
+            return stats
+
+    def check_internet_connectivity(self) -> bool:
+        current_time = time.time()
+        if current_time - self.last_connectivity_check < self.connectivity_check_interval:
+            return self.is_online
+
+        self.last_connectivity_check = current_time
+
+        try:
+            response = requests.get("https://www.google.com", timeout=5)
+            self.is_online = response.status_code == 200
+            with self._lock:
+                if self.is_online and self.stats["offline_mode"]:
+                    print("[JSON-UPLOADER] ✓ Internet connection restored - switching to online mode")
+                    self.stats["offline_mode"] = False
+                elif not self.is_online and not self.stats["offline_mode"]:
+                    print("[JSON-UPLOADER] ⚠ Internet connection lost - switching to offline mode")
+                    self.stats["offline_mode"] = True
+                self.stats["last_check"] = current_time
+        except Exception:
+            self.is_online = False
+            with self._lock:
+                if not self.stats["offline_mode"]:
+                    print("[JSON-UPLOADER] ⚠ Internet connection lost - switching to offline mode")
+                    self.stats["offline_mode"] = True
+                self.stats["last_check"] = current_time
+
+        return self.is_online
+
+    def _build_payload(self, item: Dict) -> Optional[Dict]:
+        filepath = item["filename"]
+        base64_image = self.json_uploader.image_to_base64(filepath, compress=True)
+        if not base64_image:
+            return None
+
+        timestamp = item.get("epoch") or int(time.time())
+        reader_id = self.reader_map.get(item.get("source", ""), 0)
+
+        return {
+            "reader_id": reader_id,
+            "timestamp": timestamp,
+            "iso_timestamp": datetime.fromtimestamp(timestamp).isoformat(),
+            "filename": os.path.basename(filepath),
+            "image_base64": base64_image,
+        }
+
+    def upload_item(self, item: Dict) -> bool:
+        if not self.endpoint:
+            print("[JSON-UPLOADER] No endpoint configured for JSON upload")
+            return False
+
+        filepath = item["filename"]
+        if not os.path.exists(filepath):
+            print(f"[JSON-UPLOADER] File missing, marking uploaded: {os.path.basename(filepath)}")
+            return True
+
+        payload = self._build_payload(item)
+        if not payload:
+            print(f"[JSON-UPLOADER] Failed to build payload for {os.path.basename(filepath)}")
+            return False
+
+        self.json_uploader.custom_url = self.endpoint
+        print(f"[JSON-UPLOADER] Uploading {os.path.basename(filepath)} to {self.endpoint}")
+        return self.json_uploader.upload(payload)
+
+    def run_forever(self):
+        print("[JSON-UPLOADER] Background JSON upload thread started")
+        print(f"[JSON-UPLOADER] Endpoint: {self.endpoint or 'NOT SET'}")
+
+        while not self._stop:
+            try:
+                is_online = self.check_internet_connectivity()
+                items = get_pending_batch(self.batch_size)
+
+                if not items:
+                    time.sleep(self.sleep_ok)
+                    continue
+
+                if not is_online:
+                    print(f"[JSON-UPLOADER] Offline - {len(items)} images pending, will retry when online")
+                    time.sleep(self.sleep_fail)
+                    continue
+
+                had_error = False
+                for item in items:
+                    fid = item["id"]
+                    filepath = item["filename"]
+
+                    if not os.path.exists(filepath):
+                        print(f"[JSON-UPLOADER] File gone, marking as uploaded: {os.path.basename(filepath)}")
+                        mark_uploaded(fid)
+                        continue
+
+                    success = self.upload_item(item)
+                    if success:
+                        mark_uploaded(fid)
+                        with self._lock:
+                            self.stats["total_uploaded"] += 1
+                    else:
+                        had_error = True
+                        mark_failed(fid, "JSON upload failed")
+                        with self._lock:
+                            self.stats["total_failed"] += 1
+
+                time.sleep(self.sleep_fail if had_error else self.sleep_ok)
+
+            except Exception as e:
+                print(f"[JSON-UPLOADER] ✗ Error in upload loop: {type(e).__name__}: {str(e)[:100]}")
+                time.sleep(self.sleep_fail)
+
+        print("[JSON-UPLOADER] Background JSON upload thread stopped")
